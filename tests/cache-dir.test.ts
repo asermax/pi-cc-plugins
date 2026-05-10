@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { parseSource, getCloneDir, getCacheBaseDir } from "../index.js";
+import { getCloneDir, getCacheBaseDir } from "../src/cache.js";
+import { parseSource } from "../src/source.js";
 import { join } from "node:path";
 
 describe("getCacheBaseDir", () => {

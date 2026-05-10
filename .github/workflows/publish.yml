@@ -8,8 +8,23 @@ permissions:
   contents: read
 
 jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+
+      - run: npm clean-install
+
+      - run: npm test
+
   release:
     name: Release
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: write

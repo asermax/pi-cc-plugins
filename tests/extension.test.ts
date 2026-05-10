@@ -39,6 +39,8 @@ function createMockCtx(cwd?: string) {
 
 // Import the extension after mocking setup
 import extension from "../index.js";
+import { parseSource, resolvePlugin } from "../src/index.js";
+import { readCcPlugins } from "../src/settings.js";
 
 describe("extension lifecycle", () => {
 	it("registers session_start and resources_discover handlers", () => {
@@ -80,8 +82,7 @@ describe("extension lifecycle", () => {
 
 describe("resolvePlugin with local source", () => {
 	// Test local source resolution directly
-	it("resolves a local plugin and discovers its skills", async () => {
-		const { parseSource, resolvePlugin } = await import("../index.js");
+	it("resolves a local plugin and discovers its skills", () => {
 		const source = parseSource(`local:${resolve(fixtures, "mock-plugin")}`);
 		const plugin = resolvePlugin(source);
 
@@ -90,25 +91,20 @@ describe("resolvePlugin with local source", () => {
 		expect(plugin.rootDir).toBe(resolve(fixtures, "mock-plugin"));
 	});
 
-	it("resolves a local plugin with tilde path", async () => {
-		const { parseSource, resolvePlugin } = await import("../index.js");
-		// Use the actual home directory for this test
-		const actualPath = join(homedir(), ".cache"); // something that definitely exists
+	it("resolves a local plugin with tilde path", () => {
+		const actualPath = join(homedir(), ".cache");
 		const source = parseSource(`local:~/.cache`);
-		// This will resolve to ~/.cache which exists but has no skills
 		const plugin = resolvePlugin(source);
 		expect(plugin.rootDir).toBe(actualPath);
 		expect(plugin.skillPaths).toEqual([]);
 	});
 
-	it("throws for non-existent local path", async () => {
-		const { parseSource, resolvePlugin } = await import("../index.js");
+	it("throws for non-existent local path", () => {
 		const source = parseSource("local:/nonexistent/plugin/path");
 		expect(() => resolvePlugin(source)).toThrow("does not exist");
 	});
 
-	it("resolves local plugin with subpath", async () => {
-		const { parseSource, resolvePlugin } = await import("../index.js");
+	it("resolves local plugin with subpath", () => {
 		const source = parseSource(`local:${resolve(fixtures, "mock-plugin")}#subpath=skills/code-reviewer`);
 		// This subpath exists but is a skill dir, not a plugin dir — but it should still resolve
 		// The rootDir will be the subpath, but no skills/ dir inside a skill dir
@@ -128,8 +124,7 @@ describe("readCcPlugins", () => {
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	it("reads ccPlugins from a project settings file", async () => {
-		const { readCcPlugins } = await import("../index.js");
+	it("reads ccPlugins from a project settings file", () => {
 		const settingsDir = join(tmpDir, ".pi");
 		mkdirSync(settingsDir, { recursive: true });
 		writeFileSync(
@@ -141,8 +136,7 @@ describe("readCcPlugins", () => {
 		expect(result).toEqual(["github:owner/repo", "local:~/path"]);
 	});
 
-	it("returns empty array when no ccPlugins in settings", async () => {
-		const { readCcPlugins } = await import("../index.js");
+	it("returns empty array when no ccPlugins in settings", () => {
 		writeFileSync(
 			join(tmpDir, "settings.json"),
 			JSON.stringify({ theme: "dark" }),
@@ -152,15 +146,12 @@ describe("readCcPlugins", () => {
 		expect(result).toEqual([]);
 	});
 
-	it("returns empty array when settings file doesn't exist", async () => {
-		const { readCcPlugins } = await import("../index.js");
+	it("returns empty array when settings file doesn't exist", () => {
 		const result = readCcPlugins("/nonexistent/directory");
 		expect(result).toEqual([]);
 	});
 
-	it("merges project settings over global settings", async () => {
-		const { readCcPlugins } = await import("../index.js");
-
+	it("merges project settings over global settings", () => {
 		// We can't easily mock the global settings path (it's hardcoded to ~/.pi/agent/settings.json)
 		// So we just test that project settings are read correctly
 		const settingsDir = join(tmpDir, ".pi");
@@ -174,8 +165,7 @@ describe("readCcPlugins", () => {
 		expect(result).toEqual(["github:foo/bar"]);
 	});
 
-	it("handles JSON with comments", async () => {
-		const { readCcPlugins } = await import("../index.js");
+	it("handles JSON with comments", () => {
 		const settingsDir = join(tmpDir, ".pi");
 		mkdirSync(settingsDir, { recursive: true });
 		writeFileSync(
@@ -190,8 +180,7 @@ describe("readCcPlugins", () => {
 		expect(result).toEqual(["github:owner/repo"]);
 	});
 
-	it("filters out non-string entries", async () => {
-		const { readCcPlugins } = await import("../index.js");
+	it("filters out non-string entries", () => {
 		const settingsDir = join(tmpDir, ".pi");
 		mkdirSync(settingsDir, { recursive: true });
 		writeFileSync(

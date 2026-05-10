@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { resolve } from "node:path";
-import { discoverSkillPaths, readPluginName } from "../index.js";
+import { discoverSkillPaths, readPluginName } from "../src/plugin.js";
 
 const fixtures = resolve(import.meta.dirname, "fixtures");
 

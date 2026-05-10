@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseSource } from "../index.js";
+import { parseSource } from "../src/source.js";
 
 describe("parseSource", () => {
 	// ---- github: sources ----
