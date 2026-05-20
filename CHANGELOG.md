@@ -1,3 +1,10 @@
+## [1.1.1](https://github.com/asermax/pi-cc-plugins/compare/v1.1.0...v1.1.1) (2026-05-20)
+
+
+### Bug Fixes
+
+* normalize skill frontmatter for pi ([2f89b3f](https://github.com/asermax/pi-cc-plugins/commit/2f89b3f5d119825c35db2bcfbc8c73b7fe3532a1))
+
 # [1.1.0](https://github.com/asermax/pi-cc-plugins/compare/v1.0.1...v1.1.0) (2026-05-20)
 
 
