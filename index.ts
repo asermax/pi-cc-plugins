@@ -28,6 +28,7 @@ import type { ResolvedPlugin } from "./src/types.js";
 import { parseSource } from "./src/source.js";
 import { readCcPlugins } from "./src/settings.js";
 import { resolvePlugin } from "./src/plugin.js";
+import { materializeSkillPaths } from "./src/skills.js";
 import {
 	parseCcAgent,
 	convertCcAgent,
@@ -43,6 +44,7 @@ export { parseSource } from "./src/source.js";
 export { readCcPlugins, readJsonFile } from "./src/settings.js";
 export { getCacheBaseDir, getCloneDir, ensureCloned } from "./src/cache.js";
 export { resolvePlugin, readPluginName, discoverSkillPaths, discoverAgentPaths } from "./src/plugin.js";
+export { materializeSkillPaths, sanitizeSkillMarkdown, normalizeSkillName } from "./src/skills.js";
 export type { ParsedSource, ResolvedPlugin, ParsedAgent } from "./src/types.js";
 export {
 	parseFrontmatter,
@@ -87,6 +89,7 @@ export default function (pi: ExtensionAPI, options?: ExtensionOptions) {
 			try {
 				const source = parseSource(raw);
 				const plugin = resolvePlugin(source, ctx.cwd);
+				plugin.skillPaths = materializeSkillPaths(plugin);
 				resolvedPlugins.push(plugin);
 			} catch (err: any) {
 				errors.push(`  ${raw}: ${err?.message || err}`);

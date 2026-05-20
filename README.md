@@ -56,8 +56,9 @@ Skills are discovered and loaded automatically for all configured plugins.
 1. On startup, the extension reads `ccPlugins` from your merged settings
 2. For each source, it clones the repo into `~/.cache/pi-cc-plugins/` (if not already cached)
 3. It scans each plugin for a `skills/` directory containing `SKILL.md` files
-4. These skill paths are contributed to Pi via the `resources_discover` event
-5. Pi loads them as native skills — they appear in `/skills` and work like any other Pi skill
+4. Skill directories are copied into `~/.cache/pi-cc-plugins/skills/`, where copied `SKILL.md` frontmatter is normalized for Pi's stricter YAML and skill-name validation
+5. These cached skill paths are contributed to Pi via the `resources_discover` event
+6. Pi loads them as native skills — they appear in `/skills` and work like any other Pi skill
 
 ### Plugin Requirements
 
@@ -151,6 +152,7 @@ If multiple Pi sessions are open in the same project, agent symlinks are referen
 ### Cache
 
 - Cached repos live in `~/.cache/pi-cc-plugins/` (respects `$XDG_CACHE_HOME`)
+- Materialized skills are cached separately in `~/.cache/pi-cc-plugins/skills/`
 - Converted agents are cached separately in `~/.cache/pi-cc-plugins/agents/`
 - Plugins are cloned once — subsequent sessions reuse the cached clone
 - To force a re-clone, delete the plugin's directory from the cache
