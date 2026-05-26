@@ -1,3 +1,10 @@
+# [1.3.0](https://github.com/asermax/pi-cc-plugins/compare/v1.2.0...v1.3.0) (2026-05-26)
+
+
+### Features
+
+* load claude agents from dot claude resources ([374d410](https://github.com/asermax/pi-cc-plugins/commit/374d41049439dfb82ea89531529d19dccff8c929))
+
 # [1.2.0](https://github.com/asermax/pi-cc-plugins/compare/v1.1.1...v1.2.0) (2026-05-25)
 
 
