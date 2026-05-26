@@ -19,6 +19,7 @@ const tmpDir = join(homedir(), ".pi-cc-plugins-mcp-test-tmp");
 
 function createMockPi() {
 	const handlers: Record<string, Function> = {};
+	const flags = new Map<string, boolean | string>();
 	const mockPi = {
 		on: vi.fn((event: string, handler: Function) => {
 			handlers[event] = handler;
@@ -26,8 +27,12 @@ function createMockPi() {
 		registerTool: vi.fn(),
 		registerShortcut: vi.fn(),
 		registerCommand: vi.fn(),
+		registerFlag: vi.fn((name: string, _options: { type: string }) => {
+			flags.set(name, false);
+		}),
+		getFlag: vi.fn((name: string) => flags.get(name)),
 	};
-	return { mockPi, handlers };
+	return { mockPi, handlers, flags };
 }
 
 function createMockCtx(cwd: string) {

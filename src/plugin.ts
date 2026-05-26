@@ -9,13 +9,16 @@ import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { SOURCE_TYPES, type ParsedSource, type ResolvedPlugin } from "./types.js";
 import { walkSkillDir } from "./skills.js";
-import { ensureCloned } from "./cache.js";
+import { ensureCloned, updateClone } from "./cache.js";
 
 /**
  * Resolve a single ccPlugins source string into a ResolvedPlugin.
  * Handles cloning (for remote sources) and skill path discovery.
+ *
+ * When `update` is true, already-cached remote plugins are fetched
+ * and hard-reset to the latest commit instead of being reused as-is.
  */
-export function resolvePlugin(source: ParsedSource, cwd?: string): ResolvedPlugin {
+export function resolvePlugin(source: ParsedSource, cwd?: string, update?: boolean): ResolvedPlugin {
 	let rootDir: string;
 
 	if (source.type === SOURCE_TYPES.local) {
@@ -32,8 +35,8 @@ export function resolvePlugin(source: ParsedSource, cwd?: string): ResolvedPlugi
 			throw new Error(`Local plugin path does not exist: ${rootDir} (from "${source.raw}")`);
 		}
 	} else {
-		// Remote source — clone if needed
-		const cloneDir = ensureCloned(source);
+		// Remote source — clone if needed (or update if requested)
+		const cloneDir = update ? updateClone(source) : ensureCloned(source);
 		rootDir = cloneDir;
 	}
 

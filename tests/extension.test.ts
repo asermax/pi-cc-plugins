@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { resolve, join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { execSync } from "node:child_process";
 
 // We test the extension lifecycle by simulating Pi's event system
 // and checking that the correct skill paths are contributed.
@@ -14,6 +15,7 @@ const tmpDir = join(homedir(), ".pi-cc-plugins-test-tmp");
 /** Create a mock ExtensionAPI that captures event registrations */
 function createMockPi() {
 	const handlers: Record<string, Function> = {};
+	const flags = new Map<string, boolean | string>();
 	const mockPi = {
 		on: vi.fn((event: string, handler: Function) => {
 			handlers[event] = handler;
@@ -21,8 +23,12 @@ function createMockPi() {
 		registerTool: vi.fn(),
 		registerShortcut: vi.fn(),
 		registerCommand: vi.fn(),
+		registerFlag: vi.fn((name: string, _options: { type: string }) => {
+			flags.set(name, false);
+		}),
+		getFlag: vi.fn((name: string) => flags.get(name)),
 	};
-	return { mockPi, handlers };
+	return { mockPi, handlers, flags };
 }
 
 /** Create a mock ExtensionContext */
@@ -43,6 +49,7 @@ function createMockCtx(cwd?: string) {
 // Import the extension after mocking setup
 import extension from "../index.js";
 import { parseSource, resolvePlugin } from "../src/index.js";
+import { updateClone } from "../src/cache.js";
 import { readCcPlugins, readCcClaudeGlobal, readCcClaudeProject } from "../src/settings.js";
 import { CC_AGENTS_LINK_DIR } from "../src/agents.js";
 
@@ -628,5 +635,92 @@ describe("extension with .claude/agents", () => {
 
 		expect(ctx.ui.notify).not.toHaveBeenCalled();
 		expect(existsSync(join(projectDir, CC_AGENTS_LINK_DIR))).toBe(false);
+	});
+});
+
+describe("plugin update (--cc-plugins-update)", () => {
+	const mockGlobalSettingsPath = join(tmpDir, "global-settings.json");
+
+	beforeEach(() => {
+		mkdirSync(tmpDir, { recursive: true });
+		writeFileSync(mockGlobalSettingsPath, "{}");
+	});
+
+	afterEach(() => {
+		rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("registers the cc-plugins-update flag", () => {
+		const { mockPi } = createMockPi();
+		extension(mockPi as any, { globalSettingsPath: mockGlobalSettingsPath });
+
+		expect(mockPi.registerFlag).toHaveBeenCalledWith(
+			"cc-plugins-update",
+			expect.objectContaining({ type: "boolean" }),
+		);
+	});
+
+	it("updateClone creates a new clone when cache does not exist", () => {
+		// Use a real git repo in a temp location to test the update flow
+		const upstreamDir = join(tmpDir, "upstream-repo");
+		mkdirSync(upstreamDir, { recursive: true });
+		execSync("git init", { cwd: upstreamDir, stdio: "pipe" });
+		execSync("git config user.email test@pi.test", { cwd: upstreamDir, stdio: "pipe" });
+		execSync("git config user.name Test", { cwd: upstreamDir, stdio: "pipe" });
+		writeFileSync(join(upstreamDir, "README.md"), "# v1");
+		execSync("git add README.md", { cwd: upstreamDir, stdio: "pipe" });
+		execSync("git commit -m initial", { cwd: upstreamDir, stdio: "pipe" });
+
+		const source = parseSource(`git:file://${upstreamDir}`);
+
+		// First time: no cache — updateClone falls back to ensureCloned
+		const cloneDir = updateClone(source);
+		expect(existsSync(join(cloneDir, ".git"))).toBe(true);
+		expect(readFileSync(join(cloneDir, "README.md"), "utf-8")).toContain("# v1");
+
+		// Add a new commit upstream
+		writeFileSync(join(upstreamDir, "README.md"), "# v2");
+		execSync("git add README.md", { cwd: upstreamDir, stdio: "pipe" });
+		execSync("git commit -m second", { cwd: upstreamDir, stdio: "pipe" });
+
+		// Second time: updateClone should fetch and reset
+		const updatedDir = updateClone(source);
+		expect(updatedDir).toBe(cloneDir);
+		expect(readFileSync(join(cloneDir, "README.md"), "utf-8")).toContain("# v2");
+	});
+
+	it("resolvePlugin with update uses updateClone for remote sources", () => {
+		const { importMeta } = { importMeta: { dirname: fixtures } } as any;
+		const pluginDir = resolve(fixtures, "mock-plugin");
+		const source = parseSource(`local:${pluginDir}`);
+
+		// Local plugins are unaffected by update flag
+		const plugin = resolvePlugin(source, undefined, true);
+		expect(plugin.name).toBe("mock-plugin");
+		expect(plugin.rootDir).toBe(pluginDir);
+	});
+
+	it("session_start passes update flag to resolvePlugin when set", () => {
+		const { mockPi, handlers, flags } = createMockPi();
+		flags.set("cc-plugins-update", true);
+
+		extension(mockPi as any, { globalSettingsPath: mockGlobalSettingsPath });
+
+		const projectDir = join(tmpDir, "update-project");
+		const settingsDir = join(projectDir, ".pi");
+		mkdirSync(settingsDir, { recursive: true });
+		writeFileSync(
+			join(settingsDir, "settings.json"),
+			JSON.stringify({ ccPlugins: [`local:${resolve(fixtures, "mock-plugin")}`] }),
+		);
+
+		const ctx = createMockCtx(projectDir);
+		handlers["session_start"]({}, ctx);
+
+		// Should have loaded the plugin (local plugins work fine with update)
+		expect(ctx.ui.notify).toHaveBeenCalledWith(
+			expect.stringContaining("2 skill(s)"),
+			"info",
+		);
 	});
 });

@@ -77,12 +77,42 @@ export function ensureCloned(source: ParsedSource): string {
 	return cloneDir;
 }
 
+/**
+ * Update an already-cloned remote source by fetching the latest commit
+ * and hard-resetting to it. If not yet cloned, delegates to ensureCloned().
+ * Returns the clone directory path.
+ * Throws on fetch/reset failure.
+ */
+export function updateClone(source: ParsedSource): string {
+	const cloneDir = getCloneDir(source);
+	if (!cloneDir) throw new Error(`Cannot update local source: ${source.raw}`);
+
+	if (!existsSync(join(cloneDir, ".git"))) {
+		return ensureCloned(source);
+	}
+
+	try {
+		execSync(`git -C ${quote(cloneDir)} fetch origin`, {
+			stdio: "pipe",
+			timeout: 60_000,
+		});
+		execSync(`git -C ${quote(cloneDir)} reset --hard origin/HEAD`, {
+			stdio: "pipe",
+			timeout: 30_000,
+		});
+	} catch (err: any) {
+		throw new Error(`Failed to update ${source.raw}: ${err?.stderr?.toString()?.trim() || err?.message || "unknown error"}`);
+	}
+
+	return cloneDir;
+}
+
 function resolveGitUrl(source: ParsedSource): string {
 	if (source.type === SOURCE_TYPES.github) {
 		return `https://github.com/${source.ref}.git`;
 	}
 	// git: source — ref is already a URL-ish string
-	if (source.ref.startsWith("https://") || source.ref.startsWith("git@") || source.ref.startsWith("ssh://")) {
+	if (source.ref.startsWith("https://") || source.ref.startsWith("git@") || source.ref.startsWith("ssh://") || source.ref.startsWith("file://")) {
 		return source.ref;
 	}
 	// Assume it's a domain-less path like github.com/user/repo

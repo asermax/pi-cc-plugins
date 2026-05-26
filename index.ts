@@ -46,7 +46,7 @@ import { hasManagedMcpState, syncProjectMcpConfig } from "./src/mcp.js";
 
 export { parseSource } from "./src/source.js";
 export { readCcPlugins, readCcClaudeGlobal, readCcClaudeProject, readPiPackages, isMcpAdapterInstalled, readJsonFile } from "./src/settings.js";
-export { getCacheBaseDir, getCloneDir, ensureCloned } from "./src/cache.js";
+export { getCacheBaseDir, getCloneDir, ensureCloned, updateClone } from "./src/cache.js";
 export { resolvePlugin, readPluginName, discoverSkillPaths, discoverAgentPaths, discoverMcpConfigPaths } from "./src/plugin.js";
 export { materializeSkillPaths, materializeStandaloneSkillPath, walkSkillDir, sanitizeSkillMarkdown, normalizeSkillName } from "./src/skills.js";
 export type { ParsedSource, ResolvedPlugin, ParsedAgent, McpServerEntry, PluginMcpServer, ManagedMcpEntry, ManagedMcpSidecar, McpSyncResult } from "./src/types.js";
@@ -84,6 +84,12 @@ interface AgentSource {
 }
 
 export default function (pi: ExtensionAPI, options?: ExtensionOptions) {
+	// Register CLI flag for updating cached plugins
+	pi.registerFlag("cc-plugins-update", {
+		type: "boolean",
+		description: "Update cached plugin repos before loading (git fetch + hard reset)",
+	});
+
 	/** Cached resolved plugins for the current session */
 	let resolvedPlugins: ResolvedPlugin[] = [];
 	/** Materialized skill paths from .claude/skills (not from plugins) */
@@ -163,7 +169,7 @@ export default function (pi: ExtensionAPI, options?: ExtensionOptions) {
 		for (const raw of ccPlugins) {
 			try {
 				const source = parseSource(raw);
-				const plugin = resolvePlugin(source, ctx.cwd);
+				const plugin = resolvePlugin(source, ctx.cwd, pi.getFlag("cc-plugins-update") as boolean | undefined);
 				plugin.skillPaths = materializeSkillPaths(plugin);
 				resolvedPlugins.push(plugin);
 			} catch (err: any) {
