@@ -1,3 +1,10 @@
+## [1.3.1](https://github.com/asermax/pi-cc-plugins/compare/v1.3.0...v1.3.1) (2026-05-26)
+
+
+### Bug Fixes
+
+* disable npm provenance during release ([451dec1](https://github.com/asermax/pi-cc-plugins/commit/451dec1923a9925f94a4709de08e62b54da37044))
+
 # [1.3.0](https://github.com/asermax/pi-cc-plugins/compare/v1.2.0...v1.3.0) (2026-05-26)
 
 
