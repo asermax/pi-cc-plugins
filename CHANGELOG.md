@@ -1,3 +1,10 @@
+# [1.4.0](https://github.com/asermax/pi-cc-plugins/compare/v1.3.1...v1.4.0) (2026-05-26)
+
+
+### Features
+
+* expose plugin-provided MCP servers via pi-mcp-adapter ([baa0a55](https://github.com/asermax/pi-cc-plugins/commit/baa0a55197fc98050839b20914a9c9e33be0d68f))
+
 ## [1.3.1](https://github.com/asermax/pi-cc-plugins/compare/v1.3.0...v1.3.1) (2026-05-26)
 
 
