@@ -87,9 +87,9 @@ If the plugin's `plugin.json` specifies custom paths, they will be respected:
 }
 ```
 
-## Standalone `.claude/skills`
+## Standalone `.claude` resources
 
-In addition to loading skills from plugin repos, this extension can load standalone Claude Code skills from your global or project `.claude/skills` directories. These skills go through the same frontmatter sanitization as plugin skills, ensuring Pi can parse them correctly.
+In addition to loading resources from plugin repos, this extension can load standalone Claude Code skills and agents from your global or project `.claude` directories. Skills go through the same frontmatter sanitization as plugin skills, and agents go through the same pi-subagents conversion as plugin agents.
 
 ### Settings
 
@@ -98,31 +98,37 @@ Add either or both settings to your Pi settings file:
 ```jsonc
 // ~/.pi/agent/settings.json or .pi/settings.json
 {
-  "ccClaudeSkillsGlobal": true,   // load skills from ~/.claude/skills/
-  "ccClaudeSkillsProject": true   // load skills from <project>/.claude/skills/
+  "ccClaudeGlobal": true,   // load ~/.claude/skills/ and ~/.claude/agents/
+  "ccClaudeProject": true   // load <project>/.claude/skills/ and <project>/.claude/agents/
 }
 ```
 
-Both default to `false` (opt-in) to avoid conflicts with Pi's native `skills` setting if you're already using it to point at `.claude/skills`.
+Both default to `false` (opt-in) to avoid conflicts with Pi's native `skills` setting if you're already using it to point at `.claude/skills`. The old `ccClaudeSkillsGlobal` and `ccClaudeSkillsProject` keys are no longer supported.
 
 ### How It Works
 
-1. On startup, the extension checks the `ccClaudeSkillsGlobal` and `ccClaudeSkillsProject` settings
+1. On startup, the extension checks the `ccClaudeGlobal` and `ccClaudeProject` settings
 2. For each enabled setting, it scans the corresponding `.claude/skills/` directory for subdirectories containing `SKILL.md` files
-3. Discovered skill directories are copied to the cache with sanitized frontmatter (same as plugin skills)
-4. The cached skill paths are contributed to Pi via `resources_discover`
-5. Pi loads them as native skills
+3. It also scans the corresponding `.claude/agents/` directory for agent `.md` files
+4. Discovered skill directories are copied to the cache with sanitized frontmatter and tool definitions removed (same as plugin skills)
+5. Discovered agents are converted with `model` and tool definitions removed, then linked through pi-subagents when `pi-subagents` is installed
+6. The cached skill paths are contributed to Pi via `resources_discover`
+7. Pi loads the resources as native skills and project-level agents
 
 ### Directory Structure
 
 ```
-~/.claude/skills/          # global (ccClaudeSkillsGlobal)
+~/.claude/skills/          # global (ccClaudeGlobal)
   my-global-skill/
     SKILL.md
+~/.claude/agents/          # global (ccClaudeGlobal)
+  my-global-agent.md
 
-<project>/.claude/skills/  # project (ccClaudeSkillsProject)
+<project>/.claude/skills/  # project (ccClaudeProject)
   my-project-skill/
     SKILL.md
+<project>/.claude/agents/  # project (ccClaudeProject)
+  my-project-agent.md
 ```
 
 ### Relationship to Pi's Native `skills` Setting
@@ -135,11 +141,11 @@ Pi has a built-in `skills` setting that can point at arbitrary directories:
 }
 ```
 
-However, Pi loads those skills as-is without any frontmatter sanitization. Claude Code `SKILL.md` files often use loose YAML (unquoted strings with colons, underscores in names) that Pi's strict YAML parser rejects. Using `ccClaudeSkillsGlobal`/`ccClaudeSkillsProject` instead ensures the frontmatter is normalized automatically.
+However, Pi loads those skills as-is without any frontmatter sanitization. Claude Code `SKILL.md` files often use loose YAML (unquoted strings with colons, underscores in names) that Pi's strict YAML parser rejects. Using `ccClaudeGlobal`/`ccClaudeProject` instead ensures the frontmatter is normalized automatically.
 
 ## Agents
 
-Plugin agents are converted to [pi-subagents](https://github.com/nicobailon/pi-subagents) format and made available as project-level agents.
+Plugin agents and standalone `.claude/agents` are converted to [pi-subagents](https://github.com/nicobailon/pi-subagents) format and made available as project-level agents. Imported `model` and tool definitions are intentionally dropped because Claude Code values do not reliably match Pi identifiers.
 
 ### Requirements
 
@@ -151,7 +157,7 @@ Plugin agents are converted to [pi-subagents](https://github.com/nicobailon/pi-s
 ### How Agents Work
 
 1. On `session_start`, the extension checks if `pi-subagents` is installed
-2. If installed, it scans each plugin's `agents/` directory for `.md` files
+2. If installed, it scans each plugin's `agents/` directory and enabled `.claude/agents/` directories for `.md` files
 3. Each agent is parsed (Claude Code format) and converted to pi-subagents format
 4. Converted agents are cached in `~/.cache/pi-cc-plugins/agents/`
 5. Symlinks are created in `{project}/.pi/agents/cc-plugins/` pointing to the cached files
@@ -180,20 +186,20 @@ The converter maps these fields to pi-subagents format and adds defaults:
 |-------|---------|
 | `name` | Used directly; namespaced with `package: {plugin-name}` |
 | `description` | Direct |
-| `model` | Pass-through |
-| `tools` | Pass-through |
+| `model` | Dropped because Claude Code model names do not reliably match Pi model identifiers |
+| `tools` | Dropped because Claude Code tool names do not reliably match Pi agent tool identifiers |
 | `skills` | Pass-through |
 | *(default)* | `systemPromptMode: append`, `inheritProjectContext: true`, `inheritSkills: true` |
 
-### Using Plugin Agents
+### Using Agents
 
-Once loaded, plugin agents appear in pi-subagents:
+Once loaded, converted agents appear in pi-subagents:
 
 ```text
 subagent({ action: "list" })
 ```
 
-Plugin agents show up as `{plugin-name}.{agent-name}` (using the dotted package name format).
+Plugin agents show up as `{plugin-name}.{agent-name}`. Standalone Claude agents use `claude-global.{agent-name}` or `claude-project.{agent-name}`.
 
 ### Reference Counting
 

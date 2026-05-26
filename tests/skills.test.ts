@@ -53,6 +53,26 @@ Body
 		expect(result).toContain("user-invocable: false");
 		expect(result).toContain("description: |\n  Use when: production data helps.");
 	});
+
+	it("removes tool frontmatter definitions", () => {
+		const result = sanitizeSkillMarkdown(`---
+name: tool-skill
+description: Uses tools
+tools: bash, read
+allowed-tools: Bash(git status:*), Read
+allowed_tools: Grep
+allowedTools: Glob
+---
+Body
+`, "tool-skill");
+
+		expect(result).toContain('name: "tool-skill"');
+		expect(result).toContain('description: "Uses tools"');
+		expect(result).not.toContain("tools:");
+		expect(result).not.toContain("allowed-tools:");
+		expect(result).not.toContain("allowed_tools:");
+		expect(result).not.toContain("allowedTools:");
+	});
 });
 
 describe("materializeStandaloneSkillPath", () => {

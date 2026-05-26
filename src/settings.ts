@@ -46,19 +46,19 @@ function readBooleanSetting(key: string, cwd?: string, options?: { globalSetting
 }
 
 /**
- * Read the ccClaudeSkillsGlobal boolean from Pi's merged settings.
- * When true, the extension discovers skills from ~/.claude/skills/.
+ * Read the ccClaudeGlobal boolean from Pi's merged settings.
+ * When true, the extension discovers Claude resources from ~/.claude/.
  */
-export function readCcClaudeSkillsGlobal(cwd?: string, options?: { globalSettingsPath?: string }): boolean {
-	return readBooleanSetting("ccClaudeSkillsGlobal", cwd, options);
+export function readCcClaudeGlobal(cwd?: string, options?: { globalSettingsPath?: string }): boolean {
+	return readBooleanSetting("ccClaudeGlobal", cwd, options);
 }
 
 /**
- * Read the ccClaudeSkillsProject boolean from Pi's merged settings.
- * When true, the extension discovers skills from <project>/.claude/skills/.
+ * Read the ccClaudeProject boolean from Pi's merged settings.
+ * When true, the extension discovers Claude resources from <project>/.claude/.
  */
-export function readCcClaudeSkillsProject(cwd?: string, options?: { globalSettingsPath?: string }): boolean {
-	return readBooleanSetting("ccClaudeSkillsProject", cwd, options);
+export function readCcClaudeProject(cwd?: string, options?: { globalSettingsPath?: string }): boolean {
+	return readBooleanSetting("ccClaudeProject", cwd, options);
 }
 
 export function readJsonFile(filePath: string): Record<string, unknown> {

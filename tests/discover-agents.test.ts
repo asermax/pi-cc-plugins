@@ -180,8 +180,8 @@ describe("convertCcAgent", () => {
 		expect(result).toContain("name: code-reviewer");
 		expect(result).toContain("package: my-plugin");
 		expect(result).toContain("description: Reviews code");
-		expect(result).toContain("model: sonnet");
-		expect(result).toContain("tools: read, grep");
+		expect(result).not.toContain("model:");
+		expect(result).not.toContain("tools:");
 		expect(result).toContain("skills: code-review");
 		expect(result).toContain("systemPromptMode: append");
 		expect(result).toContain("inheritProjectContext: true");
@@ -358,6 +358,20 @@ describe("reference counting and symlinks", () => {
 // ---------------------------------------------------------------------------
 
 describe("isSubagentsInstalled", () => {
+	it("returns true when pi-subagents is listed in the provided settings", () => {
+		const settingsPath = join(tmpDir, "settings.json");
+		writeFileSync(settingsPath, JSON.stringify({ packages: ["npm:pi-subagents"] }));
+
+		expect(isSubagentsInstalled({ globalSettingsPath: settingsPath })).toBe(true);
+	});
+
+	it("returns false when pi-subagents is absent from the provided settings", () => {
+		const settingsPath = join(tmpDir, "settings.json");
+		writeFileSync(settingsPath, JSON.stringify({ packages: ["npm:other-package"] }));
+
+		expect(isSubagentsInstalled({ globalSettingsPath: settingsPath })).toBe(false);
+	});
+
 	it("returns a boolean (depends on real settings)", () => {
 		// This reads the real user settings — just verify it doesn't throw
 		const result = isSubagentsInstalled();

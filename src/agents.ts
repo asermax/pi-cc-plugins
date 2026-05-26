@@ -104,15 +104,9 @@ export function convertCcAgent(agent: ParsedAgent, pluginName: string): string {
 	// Description
 	lines.push(`description: ${agent.description}`);
 
-	// Model: pass through as-is
-	if (agent.model) {
-		lines.push(`model: ${agent.model}`);
-	}
+	// Claude Code model names do not reliably match Pi agent model identifiers.
 
-	// Tools: pass through allowlist if specified
-	if (agent.tools) {
-		lines.push(`tools: ${agent.tools}`);
-	}
+	// Claude Code tool names do not reliably match Pi agent tool identifiers.
 
 	// Skills: pass through if specified
 	if (agent.skills) {
@@ -336,8 +330,8 @@ export function unlinkAgents(projectRoot: string): void {
  * Check if pi-subagents is installed by reading Pi's settings files
  * and looking for it in the `packages` array.
  */
-export function isSubagentsInstalled(): boolean {
-	const globalPath = join(homedir(), ".pi", "agent", "settings.json");
+export function isSubagentsInstalled(options?: { globalSettingsPath?: string }): boolean {
+	const globalPath = options?.globalSettingsPath ?? join(homedir(), ".pi", "agent", "settings.json");
 	const globalSettings = readJsonFile(globalPath);
 	const packages = globalSettings.packages;
 

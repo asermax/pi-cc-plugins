@@ -42,9 +42,9 @@ export interface ParsedAgent {
 	name: string;
 	/** Agent description from frontmatter */
 	description: string;
-	/** Model to use (pass-through) */
+	/** Source model value, parsed for compatibility but not emitted in converted Pi agents */
 	model?: string;
-	/** Comma-separated tool allowlist */
+	/** Source tool allowlist, parsed for compatibility but not emitted in converted Pi agents */
 	tools?: string;
 	/** Comma-separated skill names to preload */
 	skills?: string;

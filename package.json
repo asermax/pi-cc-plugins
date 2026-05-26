@@ -1,7 +1,7 @@
 {
   "name": "@asermax/pi-cc-plugins",
   "version": "1.2.0",
-  "description": "Use Claude Code plugins (skills) directly in Pi",
+  "description": "Use Claude Code plugins (skills & agents) directly in Pi",
   "type": "module",
   "keywords": [
     "pi-package",

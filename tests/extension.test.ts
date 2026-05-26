@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { resolve, join } from "node:path";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 
 // We test the extension lifecycle by simulating Pi's event system
@@ -43,7 +43,8 @@ function createMockCtx(cwd?: string) {
 // Import the extension after mocking setup
 import extension from "../index.js";
 import { parseSource, resolvePlugin } from "../src/index.js";
-import { readCcPlugins, readCcClaudeSkillsGlobal, readCcClaudeSkillsProject } from "../src/settings.js";
+import { readCcPlugins, readCcClaudeGlobal, readCcClaudeProject } from "../src/settings.js";
+import { CC_AGENTS_LINK_DIR } from "../src/agents.js";
 
 describe("extension lifecycle", () => {
 	const mockGlobalSettingsPath = join(tmpDir, "global-settings.json");
@@ -240,7 +241,7 @@ describe("readCcPlugins", () => {
 	});
 });
 
-describe("readCcClaudeSkillsGlobal", () => {
+describe("readCcClaudeGlobal", () => {
 	const mockGlobalSettingsPath = join(tmpDir, "global-settings.json");
 
 	beforeEach(() => {
@@ -253,36 +254,42 @@ describe("readCcClaudeSkillsGlobal", () => {
 	});
 
 	it("returns false when setting is absent", () => {
-		const result = readCcClaudeSkillsGlobal(tmpDir, { globalSettingsPath: mockGlobalSettingsPath });
+		const result = readCcClaudeGlobal(tmpDir, { globalSettingsPath: mockGlobalSettingsPath });
 		expect(result).toBe(false);
 	});
 
 	it("returns true when enabled in global settings", () => {
-		writeFileSync(mockGlobalSettingsPath, JSON.stringify({ ccClaudeSkillsGlobal: true }));
-		const result = readCcClaudeSkillsGlobal(tmpDir, { globalSettingsPath: mockGlobalSettingsPath });
+		writeFileSync(mockGlobalSettingsPath, JSON.stringify({ ccClaudeGlobal: true }));
+		const result = readCcClaudeGlobal(tmpDir, { globalSettingsPath: mockGlobalSettingsPath });
 		expect(result).toBe(true);
 	});
 
 	it("returns false when set to a non-boolean value", () => {
-		writeFileSync(mockGlobalSettingsPath, JSON.stringify({ ccClaudeSkillsGlobal: "yes" }));
-		const result = readCcClaudeSkillsGlobal(tmpDir, { globalSettingsPath: mockGlobalSettingsPath });
+		writeFileSync(mockGlobalSettingsPath, JSON.stringify({ ccClaudeGlobal: "yes" }));
+		const result = readCcClaudeGlobal(tmpDir, { globalSettingsPath: mockGlobalSettingsPath });
+		expect(result).toBe(false);
+	});
+
+	it("does not honor the legacy ccClaudeSkillsGlobal setting", () => {
+		writeFileSync(mockGlobalSettingsPath, JSON.stringify({ ccClaudeSkillsGlobal: true }));
+		const result = readCcClaudeGlobal(tmpDir, { globalSettingsPath: mockGlobalSettingsPath });
 		expect(result).toBe(false);
 	});
 
 	it("project settings override global", () => {
-		writeFileSync(mockGlobalSettingsPath, JSON.stringify({ ccClaudeSkillsGlobal: true }));
+		writeFileSync(mockGlobalSettingsPath, JSON.stringify({ ccClaudeGlobal: true }));
 		const settingsDir = join(tmpDir, ".pi");
 		mkdirSync(settingsDir, { recursive: true });
 		writeFileSync(
 			join(settingsDir, "settings.json"),
-			JSON.stringify({ ccClaudeSkillsGlobal: false }),
+			JSON.stringify({ ccClaudeGlobal: false }),
 		);
-		const result = readCcClaudeSkillsGlobal(tmpDir, { globalSettingsPath: mockGlobalSettingsPath });
+		const result = readCcClaudeGlobal(tmpDir, { globalSettingsPath: mockGlobalSettingsPath });
 		expect(result).toBe(false);
 	});
 });
 
-describe("readCcClaudeSkillsProject", () => {
+describe("readCcClaudeProject", () => {
 	const mockGlobalSettingsPath = join(tmpDir, "global-settings.json");
 
 	beforeEach(() => {
@@ -295,7 +302,7 @@ describe("readCcClaudeSkillsProject", () => {
 	});
 
 	it("returns false when setting is absent", () => {
-		const result = readCcClaudeSkillsProject(tmpDir, { globalSettingsPath: mockGlobalSettingsPath });
+		const result = readCcClaudeProject(tmpDir, { globalSettingsPath: mockGlobalSettingsPath });
 		expect(result).toBe(false);
 	});
 
@@ -304,9 +311,9 @@ describe("readCcClaudeSkillsProject", () => {
 		mkdirSync(settingsDir, { recursive: true });
 		writeFileSync(
 			join(settingsDir, "settings.json"),
-			JSON.stringify({ ccClaudeSkillsProject: true }),
+			JSON.stringify({ ccClaudeProject: true }),
 		);
-		const result = readCcClaudeSkillsProject(tmpDir, { globalSettingsPath: mockGlobalSettingsPath });
+		const result = readCcClaudeProject(tmpDir, { globalSettingsPath: mockGlobalSettingsPath });
 		expect(result).toBe(true);
 	});
 
@@ -315,9 +322,20 @@ describe("readCcClaudeSkillsProject", () => {
 		mkdirSync(settingsDir, { recursive: true });
 		writeFileSync(
 			join(settingsDir, "settings.json"),
-			JSON.stringify({ ccClaudeSkillsProject: 1 }),
+			JSON.stringify({ ccClaudeProject: 1 }),
 		);
-		const result = readCcClaudeSkillsProject(tmpDir, { globalSettingsPath: mockGlobalSettingsPath });
+		const result = readCcClaudeProject(tmpDir, { globalSettingsPath: mockGlobalSettingsPath });
+		expect(result).toBe(false);
+	});
+
+	it("does not honor the legacy ccClaudeSkillsProject setting", () => {
+		const settingsDir = join(tmpDir, ".pi");
+		mkdirSync(settingsDir, { recursive: true });
+		writeFileSync(
+			join(settingsDir, "settings.json"),
+			JSON.stringify({ ccClaudeSkillsProject: true }),
+		);
+		const result = readCcClaudeProject(tmpDir, { globalSettingsPath: mockGlobalSettingsPath });
 		expect(result).toBe(false);
 	});
 });
@@ -334,13 +352,13 @@ describe("extension with .claude/skills", () => {
 		rmSync(tmpDir, { recursive: true, force: true });
 	});
 
-	it("loads skills from project .claude/skills when ccClaudeSkillsProject is enabled", async () => {
+	it("loads skills from project .claude/skills when ccClaudeProject is enabled", async () => {
 		const projectDir = join(tmpDir, "claude-project");
 		const settingsDir = join(projectDir, ".pi");
 		mkdirSync(settingsDir, { recursive: true });
 		writeFileSync(
 			join(settingsDir, "settings.json"),
-			JSON.stringify({ ccClaudeSkillsProject: true }),
+			JSON.stringify({ ccClaudeProject: true }),
 		);
 
 		// Create .claude/skills fixture
@@ -374,7 +392,7 @@ describe("extension with .claude/skills", () => {
 		mkdirSync(settingsDir, { recursive: true });
 		writeFileSync(
 			join(settingsDir, "settings.json"),
-			JSON.stringify({ ccClaudeSkillsProject: false }),
+			JSON.stringify({ ccClaudeProject: false }),
 		);
 
 		// Create .claude/skills fixture
@@ -398,14 +416,51 @@ describe("extension with .claude/skills", () => {
 		expect(discoverResult).toBeUndefined();
 	});
 
-	it("loads skills from global ~/.claude/skills when ccClaudeSkillsGlobal is enabled", async () => {
+	it("does not load .claude resources when only legacy settings are enabled", async () => {
+		const projectDir = join(tmpDir, "claude-legacy-off");
+		const settingsDir = join(projectDir, ".pi");
+		mkdirSync(settingsDir, { recursive: true });
+		writeFileSync(mockGlobalSettingsPath, JSON.stringify({ packages: ["npm:pi-subagents"] }));
+		writeFileSync(
+			join(settingsDir, "settings.json"),
+			JSON.stringify({ ccClaudeSkillsProject: true }),
+		);
+
+		const claudeSkillsDir = join(projectDir, ".claude", "skills", "legacy-skill");
+		mkdirSync(claudeSkillsDir, { recursive: true });
+		writeFileSync(
+			join(claudeSkillsDir, "SKILL.md"),
+			"---\nname: legacy-skill\ndescription: Legacy skill\n---\n\n# Legacy\n",
+		);
+
+		const claudeAgentsDir = join(projectDir, ".claude", "agents");
+		mkdirSync(claudeAgentsDir, { recursive: true });
+		writeFileSync(
+			join(claudeAgentsDir, "legacy-agent.md"),
+			"---\nname: legacy-agent\ndescription: Legacy agent\n---\n\nLegacy prompt.\n",
+		);
+
+		const { mockPi, handlers } = createMockPi();
+		extension(mockPi as any, { globalSettingsPath: mockGlobalSettingsPath });
+
+		const ctx = createMockCtx(projectDir);
+		handlers["session_start"]({}, ctx);
+
+		expect(ctx.ui.notify).not.toHaveBeenCalled();
+		expect(existsSync(join(projectDir, CC_AGENTS_LINK_DIR))).toBe(false);
+
+		const discoverResult = await handlers["resources_discover"]({}, ctx);
+		expect(discoverResult).toBeUndefined();
+	});
+
+	it("loads skills from global ~/.claude/skills when ccClaudeGlobal is enabled", async () => {
 		const projectDir = join(tmpDir, "claude-global-project");
 		mkdirSync(projectDir, { recursive: true });
 
 		// Enable global setting
 		writeFileSync(
 			mockGlobalSettingsPath,
-			JSON.stringify({ ccClaudeSkillsGlobal: true }),
+			JSON.stringify({ ccClaudeGlobal: true }),
 		);
 
 		// Create a fake home .claude/skills
@@ -419,7 +474,7 @@ describe("extension with .claude/skills", () => {
 
 		// We can't easily override homedir(), so we test indirectly via the settings reader
 		// The extension test verifies the setting is read correctly
-		const result = readCcClaudeSkillsGlobal(projectDir, { globalSettingsPath: mockGlobalSettingsPath });
+		const result = readCcClaudeGlobal(projectDir, { globalSettingsPath: mockGlobalSettingsPath });
 		expect(result).toBe(true);
 	});
 
@@ -431,7 +486,7 @@ describe("extension with .claude/skills", () => {
 			join(settingsDir, "settings.json"),
 			JSON.stringify({
 				ccPlugins: [`local:${resolve(fixtures, "mock-plugin")}`],
-				ccClaudeSkillsProject: true,
+				ccClaudeProject: true,
 			}),
 		);
 
@@ -466,7 +521,7 @@ describe("extension with .claude/skills", () => {
 		mkdirSync(settingsDir, { recursive: true });
 		writeFileSync(
 			join(settingsDir, "settings.json"),
-			JSON.stringify({ ccClaudeSkillsProject: true }),
+			JSON.stringify({ ccClaudeProject: true }),
 		);
 
 		// Create .claude/skills fixture with loose frontmatter
@@ -493,5 +548,85 @@ describe("extension with .claude/skills", () => {
 		expect(materialized).toContain('name: "loose-skill"');
 		expect(materialized).toContain('description: "Use when: testing, and do NOT use for: prod"');
 		expect(materialized).toContain('argument-hint: "[arg1] [arg2]"');
+	});
+});
+
+
+describe("extension with .claude/agents", () => {
+	const mockGlobalSettingsPath = join(tmpDir, "global-settings.json");
+
+	beforeEach(() => {
+		mkdirSync(tmpDir, { recursive: true });
+		writeFileSync(mockGlobalSettingsPath, JSON.stringify({ packages: ["npm:pi-subagents"] }));
+	});
+
+	afterEach(() => {
+		rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("loads agents from project .claude/agents when ccClaudeProject is enabled", () => {
+		const projectDir = join(tmpDir, "claude-agent-project");
+		const settingsDir = join(projectDir, ".pi");
+		mkdirSync(settingsDir, { recursive: true });
+		writeFileSync(
+			join(settingsDir, "settings.json"),
+			JSON.stringify({ ccClaudeProject: true }),
+		);
+
+		const claudeAgentsDir = join(projectDir, ".claude", "agents");
+		mkdirSync(claudeAgentsDir, { recursive: true });
+		writeFileSync(
+			join(claudeAgentsDir, "test-agent.md"),
+			"---\nname: test-agent\ndescription: Test project agent\nmodel: sonnet\ntools: read, grep\n---\n\nProject prompt.\n",
+		);
+
+		const { mockPi, handlers } = createMockPi();
+		extension(mockPi as any, { globalSettingsPath: mockGlobalSettingsPath });
+
+		const ctx = createMockCtx(projectDir);
+		handlers["session_start"]({}, ctx);
+
+		expect(ctx.ui.notify).toHaveBeenCalledWith(
+			expect.stringContaining("1 agent(s)"),
+			"info",
+		);
+
+		const linkPath = join(projectDir, CC_AGENTS_LINK_DIR, "claude-project--test-agent.md");
+		expect(existsSync(linkPath)).toBe(true);
+
+		const converted = readFileSync(linkPath, "utf-8");
+		expect(converted).toContain("package: claude-project");
+		expect(converted).toContain("Project prompt.");
+		expect(converted).not.toContain("model:");
+		expect(converted).not.toContain("tools:");
+
+		handlers["session_shutdown"]({}, ctx);
+		expect(existsSync(join(projectDir, CC_AGENTS_LINK_DIR))).toBe(false);
+	});
+
+	it("does not load agents from project .claude/agents when ccClaudeProject is disabled", () => {
+		const projectDir = join(tmpDir, "claude-agent-project-off");
+		const settingsDir = join(projectDir, ".pi");
+		mkdirSync(settingsDir, { recursive: true });
+		writeFileSync(
+			join(settingsDir, "settings.json"),
+			JSON.stringify({ ccClaudeProject: false }),
+		);
+
+		const claudeAgentsDir = join(projectDir, ".claude", "agents");
+		mkdirSync(claudeAgentsDir, { recursive: true });
+		writeFileSync(
+			join(claudeAgentsDir, "test-agent.md"),
+			"---\nname: test-agent\ndescription: Test project agent\n---\n\nProject prompt.\n",
+		);
+
+		const { mockPi, handlers } = createMockPi();
+		extension(mockPi as any, { globalSettingsPath: mockGlobalSettingsPath });
+
+		const ctx = createMockCtx(projectDir);
+		handlers["session_start"]({}, ctx);
+
+		expect(ctx.ui.notify).not.toHaveBeenCalled();
+		expect(existsSync(join(projectDir, CC_AGENTS_LINK_DIR))).toBe(false);
 	});
 });

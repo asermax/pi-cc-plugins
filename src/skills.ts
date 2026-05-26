@@ -150,6 +150,10 @@ function sanitizeFrontmatterLines(frontmatter: string, fallbackName: string): st
 		const key = keyValue[1];
 		const value = keyValue[2].trim();
 
+		if (isToolsFrontmatterKey(key)) {
+			continue;
+		}
+
 		if (key === "name") {
 			hasName = true;
 			sanitized.push(`name: ${quoteYamlString(normalizeSkillName(stripOuterQuotes(value), fallbackName))}`);
@@ -174,6 +178,10 @@ function sanitizeFrontmatterLines(frontmatter: string, fallbackName: string): st
 	}
 
 	return sanitized;
+}
+
+function isToolsFrontmatterKey(key: string): boolean {
+	return ["tools", "allowed-tools", "allowed_tools", "allowedTools"].includes(key);
 }
 
 function formatYamlScalar(value: string): string {

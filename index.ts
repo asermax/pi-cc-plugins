@@ -29,8 +29,8 @@ import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { ResolvedPlugin } from "./src/types.js";
 import { parseSource } from "./src/source.js";
-import { readCcPlugins, readCcClaudeSkillsGlobal, readCcClaudeSkillsProject } from "./src/settings.js";
-import { resolvePlugin } from "./src/plugin.js";
+import { readCcPlugins, readCcClaudeGlobal, readCcClaudeProject } from "./src/settings.js";
+import { discoverAgentPaths, resolvePlugin } from "./src/plugin.js";
 import { materializeSkillPaths, materializeStandaloneSkillPath, walkSkillDir } from "./src/skills.js";
 import {
 	parseCcAgent,
@@ -44,7 +44,7 @@ import {
 } from "./src/agents.js";
 
 export { parseSource } from "./src/source.js";
-export { readCcPlugins, readCcClaudeSkillsGlobal, readCcClaudeSkillsProject, readJsonFile } from "./src/settings.js";
+export { readCcPlugins, readCcClaudeGlobal, readCcClaudeProject, readJsonFile } from "./src/settings.js";
 export { getCacheBaseDir, getCloneDir, ensureCloned } from "./src/cache.js";
 export { resolvePlugin, readPluginName, discoverSkillPaths, discoverAgentPaths } from "./src/plugin.js";
 export { materializeSkillPaths, materializeStandaloneSkillPath, walkSkillDir, sanitizeSkillMarkdown, normalizeSkillName } from "./src/skills.js";
@@ -67,11 +67,19 @@ export interface ExtensionOptions {
 	globalSettingsPath?: string;
 }
 
+interface AgentSource {
+	packageName: string;
+	cacheSlug: string;
+	agentPaths: string[];
+}
+
 export default function (pi: ExtensionAPI, options?: ExtensionOptions) {
 	/** Cached resolved plugins for the current session */
 	let resolvedPlugins: ResolvedPlugin[] = [];
 	/** Materialized skill paths from .claude/skills (not from plugins) */
 	let claudeSkillPaths: string[] = [];
+	/** Agent sources from .claude/agents (not from plugins) */
+	let claudeAgentSources: AgentSource[] = [];
 	/** Track whether we incremented the refcount for this session */
 	let hasRefcount = false;
 	/** Track the cwd for cleanup on shutdown */
@@ -80,7 +88,7 @@ export default function (pi: ExtensionAPI, options?: ExtensionOptions) {
 	/** Read ccPlugins using the configured or overridden global settings path. */
 	const getPlugins = (cwd: string) => readCcPlugins(cwd, { globalSettingsPath: options?.globalSettingsPath });
 
-	/** Read ccClaudeSkills* settings. */
+	/** Read ccClaude* settings. */
 	const getSettingsOpts = (cwd: string) => ({ globalSettingsPath: options?.globalSettingsPath });
 
 	/**
@@ -98,29 +106,44 @@ export default function (pi: ExtensionAPI, options?: ExtensionOptions) {
 		);
 	};
 
+	const loadClaudeAgents = (claudeDir: string, packageName: string): AgentSource | null => {
+		const agentPaths = discoverAgentPaths(claudeDir);
+		if (agentPaths.length === 0) return null;
+		return { packageName, cacheSlug: packageName, agentPaths };
+	};
+
 	pi.on("session_start", async (_event, ctx) => {
 		sessionCwd = ctx.cwd;
 		resolvedPlugins = [];
 		claudeSkillPaths = [];
+		claudeAgentSources = [];
 		hasRefcount = false;
 
 		const ccPlugins = getPlugins(ctx.cwd);
 		const settingsOpts = getSettingsOpts(ctx.cwd);
 
-		// --- Load .claude/skills directories ---
-		const ccClaudeSkillsGlobal = readCcClaudeSkillsGlobal(ctx.cwd, settingsOpts);
-		const ccClaudeSkillsProject = readCcClaudeSkillsProject(ctx.cwd, settingsOpts);
+		// --- Load .claude directories ---
+		const ccClaudeGlobal = readCcClaudeGlobal(ctx.cwd, settingsOpts);
+		const ccClaudeProject = readCcClaudeProject(ctx.cwd, settingsOpts);
 
-		if (ccClaudeSkillsGlobal) {
-			const globalClaudeSkillsDir = join(homedir(), ".claude", "skills");
+		if (ccClaudeGlobal) {
+			const globalClaudeDir = join(homedir(), ".claude");
+			const globalClaudeSkillsDir = join(globalClaudeDir, "skills");
 			const materialized = loadClaudeSkills(globalClaudeSkillsDir, "claude-global", "~/.claude/skills");
 			claudeSkillPaths.push(...materialized);
+
+			const agentSource = loadClaudeAgents(globalClaudeDir, "claude-global");
+			if (agentSource) claudeAgentSources.push(agentSource);
 		}
 
-		if (ccClaudeSkillsProject) {
-			const projectClaudeSkillsDir = join(ctx.cwd, ".claude", "skills");
+		if (ccClaudeProject) {
+			const projectClaudeDir = join(ctx.cwd, ".claude");
+			const projectClaudeSkillsDir = join(projectClaudeDir, "skills");
 			const materialized = loadClaudeSkills(projectClaudeSkillsDir, "claude-project", ".claude/skills");
 			claudeSkillPaths.push(...materialized);
+
+			const agentSource = loadClaudeAgents(projectClaudeDir, "claude-project");
+			if (agentSource) claudeAgentSources.push(agentSource);
 		}
 
 		// --- Load ccPlugins ---
@@ -137,58 +160,61 @@ export default function (pi: ExtensionAPI, options?: ExtensionOptions) {
 			}
 		}
 
-		// --- Agent handling (from ccPlugins only) ---
-		if (resolvedPlugins.length > 0) {
-			const totalAgentPaths = resolvedPlugins.reduce(
-				(sum, p) => sum + p.agentPaths.length,
-				0,
-			);
+		// --- Agent handling (from ccPlugins and standalone .claude/agents) ---
+		let agentCount = 0;
+		const pluginAgentSources: AgentSource[] = resolvedPlugins.map((plugin) => ({
+			packageName: plugin.name,
+			cacheSlug: plugin.source.ref.replace(/[\/\\]/g, "--"),
+			agentPaths: plugin.agentPaths,
+		}));
+		const agentSources = [...pluginAgentSources, ...claudeAgentSources];
+		const totalAgentPaths = agentSources.reduce(
+			(sum, source) => sum + source.agentPaths.length,
+			0,
+		);
 
-			let agentCount = 0;
-			if (totalAgentPaths > 0) {
-				if (!isSubagentsInstalled()) {
-					ctx.ui.notify(
-						`cc-plugins: found ${totalAgentPaths} agent(s) in plugins but pi-subagents is not installed. ` +
-						`Install it with: pi install npm:pi-subagents`,
-						"warning",
-					);
-				} else {
-					// Increment refcount to protect symlinks from concurrent session cleanup
-					incrementRefcount(ctx.cwd);
-					hasRefcount = true;
+		if (totalAgentPaths > 0) {
+			if (!isSubagentsInstalled({ globalSettingsPath: options?.globalSettingsPath })) {
+				ctx.ui.notify(
+					`cc-plugins: found ${totalAgentPaths} agent(s) in configured Claude sources but pi-subagents is not installed. ` +
+					`Install it with: pi install npm:pi-subagents`,
+					"warning",
+				);
+			} else {
+				// Increment refcount to protect symlinks from concurrent session cleanup
+				incrementRefcount(ctx.cwd);
+				hasRefcount = true;
 
-					// Clean stale symlinks from plugins no longer configured
-					const currentPluginNames = new Set(resolvedPlugins.map((p) => p.name));
-					cleanupStaleSymlinks(ctx.cwd, currentPluginNames);
+				// Clean stale symlinks from sources no longer configured
+				const currentPackageNames = new Set(agentSources.map((source) => source.packageName));
+				cleanupStaleSymlinks(ctx.cwd, currentPackageNames);
 
-					// Convert and cache agents, then create symlinks
-					const cachedAgents: Array<{ pluginName: string; agentName: string; cachedPath: string }> = [];
+				// Convert and cache agents, then create symlinks
+				const cachedAgents: Array<{ pluginName: string; agentName: string; cachedPath: string }> = [];
 
-					for (const plugin of resolvedPlugins) {
-						for (const agentPath of plugin.agentPaths) {
-							try {
-								const parsed = parseCcAgent(agentPath);
-								if (!parsed) continue;
+				for (const source of agentSources) {
+					for (const agentPath of source.agentPaths) {
+						try {
+							const parsed = parseCcAgent(agentPath);
+							if (!parsed) continue;
 
-								const slug = plugin.source.ref.replace(/[\/\\]/g, "--");
-								const converted = convertCcAgent(parsed, plugin.name);
-								const cachedPath = writeCachedAgent(slug, parsed.name, converted);
+							const converted = convertCcAgent(parsed, source.packageName);
+							const cachedPath = writeCachedAgent(source.cacheSlug, parsed.name, converted);
 
-								cachedAgents.push({
-									pluginName: plugin.name,
-									agentName: parsed.name,
-									cachedPath,
-								});
-								agentCount++;
-							} catch (err: any) {
-								errors.push(`  agent ${agentPath}: ${err?.message || err}`);
-							}
+							cachedAgents.push({
+								pluginName: source.packageName,
+								agentName: parsed.name,
+								cachedPath,
+							});
+							agentCount++;
+						} catch (err: any) {
+							errors.push(`  agent ${agentPath}: ${err?.message || err}`);
 						}
 					}
+				}
 
-					if (cachedAgents.length > 0) {
-						linkAgents(ctx.cwd, cachedAgents);
-					}
+				if (cachedAgents.length > 0) {
+					linkAgents(ctx.cwd, cachedAgents);
 				}
 			}
 		}
@@ -198,9 +224,10 @@ export default function (pi: ExtensionAPI, options?: ExtensionOptions) {
 		const claudeSkillCount = claudeSkillPaths.length;
 		const totalSkillCount = pluginSkillCount + claudeSkillCount;
 
-		if (totalSkillCount > 0 || resolvedPlugins.length > 0) {
+		if (totalSkillCount > 0 || agentCount > 0 || resolvedPlugins.length > 0) {
 			const parts: string[] = [];
 			if (totalSkillCount > 0) parts.push(`${totalSkillCount} skill(s)`);
+			if (agentCount > 0) parts.push(`${agentCount} agent(s)`);
 			if (resolvedPlugins.length > 0) parts.push(`${resolvedPlugins.length} plugin(s)`);
 			ctx.ui.notify(`cc-plugins: loaded ${parts.join(" and ")}`, "info");
 		}
