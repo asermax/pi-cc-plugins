@@ -245,11 +245,21 @@ All cached data lives under `~/.cache/pi-cc-plugins/` (respects `$XDG_CACHE_HOME
 
 | Path | Contents |
 |------|----------|
-| `skills/{plugin-name}/` | Cloned plugin repos |
-| `skills/{slug}/` | Materialized skills with normalized frontmatter |
+| `{owner}--{repo}/` | Cloned plugin repos (shallow clones) |
+| `skills/{namespace}/{hash}/{slug}/` | Materialized skills with normalized frontmatter |
 | `agents/{slug}/` | Converted agent files |
 
-Plugins are cloned once — subsequent sessions reuse the cached clone. To force a re-clone, delete the plugin's directory from the cache.
+Plugins are cloned once — subsequent sessions reuse the cached clone.
+
+### Updating Cached Plugins
+
+To pull the latest version of every cached remote plugin without wiping the cache manually, start Pi with the `--cc-plugins-update` flag:
+
+```bash
+pi --cc-plugins-update
+```
+
+This runs `git fetch` + `git reset --hard origin/HEAD` on each cached remote plugin before loading. Local plugins are unaffected, and plugins that aren't cached yet are cloned as usual. To force a full re-clone instead, delete the plugin's directory from the cache.
 
 ## Removing Plugins
 

@@ -15,15 +15,16 @@ A [Pi](https://pi.dev) extension that bridges [Claude Code](https://code.claude.
 ## Architecture
 
 ```
-index.ts          Entry point — registers Pi extension hooks
+index.ts          Entry point — registers Pi extension hooks + the --cc-plugins-update flag
 src/
   types.ts        Shared types (ParsedSource, ResolvedPlugin, ParsedAgent) and SOURCE_TYPES constant map
   source.ts       Parses source strings (github:..., git:..., local:...) into ParsedSource
   settings.ts     Reads ccPlugins array from merged Pi settings (global + project)
-  cache.ts        Git cloning + cache management under ~/.cache/pi-cc-plugins/
+  cache.ts        Git cloning + cache management under ~/.cache/pi-cc-plugins/ (ensureCloned / updateClone)
   plugin.ts       Resolves a ParsedSource into a ResolvedPlugin, discovers skill + agent + MCP config paths
   agents.ts       Agent parsing, format conversion, caching, and symlink management
   mcp.ts          MCP config parsing, namespacing, project merge, and sidecar management
+  skills.ts       Skill discovery, materialization, and frontmatter sanitization
   index.ts        Barrel re-exports of all public API
 tests/            Vitest tests with fixtures
 ```
@@ -33,9 +34,9 @@ tests/            Vitest tests with fixtures
 #### Skills
 1. `session_start` → `readCcPlugins()` reads merged settings
 2. Each source string → `parseSource()` → `resolvePlugin()`
-3. Remote sources → `ensureCloned()` (shallow clone into XDG cache)
-4. `discoverSkillPaths()` walks plugin dirs for `SKILL.md` files
-5. `resources_discover` → returns flat list of skill paths to Pi
+3. Remote sources → `ensureCloned()` (shallow clone into XDG cache), or `updateClone()` (`git fetch` + `reset --hard origin/HEAD`) when the `--cc-plugins-update` flag is set
+4. `materializeSkillPaths()` copies discovered skill dirs into the cache with sanitized frontmatter (standalone `.claude/skills` use `materializeStandaloneSkillPath()`)
+5. `resources_discover` → returns flat list of materialized skill paths to Pi
 
 #### Agents
 1. `session_start` → check `isSubagentsInstalled()` via Pi settings `packages` array
