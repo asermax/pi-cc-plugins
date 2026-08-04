@@ -20,6 +20,25 @@ const tmpDir = join(homedir(), ".pi-cc-plugins-mcp-test-tmp");
 function createMockPi() {
 	const handlers: Record<string, Function> = {};
 	const flags = new Map<string, boolean | string>();
+	const eventsEmits: Array<{ channel: string; data: unknown }> = [];
+	const eventsBusHandlers = new Map<string, Set<(data: unknown) => void>>();
+	const events = {
+		emit: vi.fn((channel: string, data: unknown) => {
+			eventsEmits.push({ channel, data });
+			for (const handler of eventsBusHandlers.get(channel) ?? []) handler(data);
+		}),
+		on: vi.fn((channel: string, handler: (data: unknown) => void) => {
+			let set = eventsBusHandlers.get(channel);
+			if (!set) {
+				set = new Set();
+				eventsBusHandlers.set(channel, set);
+			}
+			set.add(handler);
+			return () => {
+				set?.delete(handler);
+			};
+		}),
+	};
 	const mockPi = {
 		on: vi.fn((event: string, handler: Function) => {
 			handlers[event] = handler;
@@ -31,8 +50,9 @@ function createMockPi() {
 			flags.set(name, false);
 		}),
 		getFlag: vi.fn((name: string) => flags.get(name)),
+		events,
 	};
-	return { mockPi, handlers, flags };
+	return { mockPi, handlers, flags, events, eventsEmits, eventsBusHandlers };
 }
 
 function createMockCtx(cwd: string) {

@@ -16,6 +16,29 @@ const tmpDir = join(homedir(), ".pi-cc-plugins-test-tmp");
 function createMockPi() {
 	const handlers: Record<string, Function> = {};
 	const flags = new Map<string, boolean | string>();
+	const eventsEmits: Array<{ channel: string; data: unknown }> = [];
+	// A minimal pi EventBus: a map of channel → handler, delivering self-emits
+	// synchronously (pi's EventBus is a Node EventEmitter, so a self-emit lands
+	// in the emitter's own listeners — that's the trap the handshake works around).
+	const eventsBusHandlers = new Map<string, Set<(data: unknown) => void>>();
+	const events = {
+		emit: vi.fn((channel: string, data: unknown) => {
+			eventsEmits.push({ channel, data });
+			// Deliver to local listeners (Node EventEmitter semantics).
+			for (const handler of eventsBusHandlers.get(channel) ?? []) handler(data);
+		}),
+		on: vi.fn((channel: string, handler: (data: unknown) => void) => {
+			let set = eventsBusHandlers.get(channel);
+			if (!set) {
+				set = new Set();
+				eventsBusHandlers.set(channel, set);
+			}
+			set.add(handler);
+			return () => {
+				set?.delete(handler);
+			};
+		}),
+	};
 	const mockPi = {
 		on: vi.fn((event: string, handler: Function) => {
 			handlers[event] = handler;
@@ -27,8 +50,9 @@ function createMockPi() {
 			flags.set(name, false);
 		}),
 		getFlag: vi.fn((name: string) => flags.get(name)),
+		events,
 	};
-	return { mockPi, handlers, flags };
+	return { mockPi, handlers, flags, events, eventsEmits, eventsBusHandlers };
 }
 
 /** Create a mock ExtensionContext */
@@ -722,5 +746,309 @@ describe("plugin update (--cc-plugins-update)", () => {
 			expect.stringContaining("2 skill(s)"),
 			"info",
 		);
+	});
+});
+
+// Bus channels for the herdr provider seam (spec §8). Mirrors the wire contract
+// in index.ts; the two packages are decoupled, so the test re-declares them.
+const HERDR_PKG = "pi-herdr-subagents";
+const PROVIDER_READY = `${HERDR_PKG}:provider-ready`;
+const PROVIDER_READY_REQUEST = `${HERDR_PKG}:provider-ready-request`;
+const REGISTER = `${HERDR_PKG}:register`;
+
+describe("herdr provider seam (spec §8)", () => {
+	const mockGlobalSettingsPath = join(tmpDir, "global-settings.json");
+
+	beforeEach(() => {
+		mkdirSync(tmpDir, { recursive: true });
+		writeFileSync(mockGlobalSettingsPath, "{}");
+	});
+
+	afterEach(() => {
+		rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	/** Wire a project with one agent in `.claude/agents` (project source). */
+	function wireProjectAgent(): string {
+		const projectDir = join(tmpDir, "herdr-project");
+		const settingsDir = join(projectDir, ".pi");
+		mkdirSync(settingsDir, { recursive: true });
+		writeFileSync(
+			join(settingsDir, "settings.json"),
+			JSON.stringify({ ccClaudeProject: true }),
+		);
+		const agentsDir = join(projectDir, ".claude", "agents");
+		mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(
+			join(agentsDir, "reviewer.md"),
+			"---\nname: reviewer\ndescription: Reviews code\n---\n\nYou review code.\n",
+		);
+		return projectDir;
+	}
+
+	it("emits provider-ready-request at factory time and sets its flag on the provider's ready, in either load order", () => {
+		// CONSUMER-FIRST: the extension factory runs before any provider signal.
+		// This also covers PROVIDER-FIRST: the consumer emits its request at
+		// factory time unconditionally, so a provider that already emitted its
+		// ready (which the consumer missed) will reply to this request. Either
+		// load order converges on the same handshake.
+		const { events, eventsEmits } = createMockPi();
+		extension({ on: () => {}, registerFlag: () => {}, getFlag: () => false, events } as any, {
+			globalSettingsPath: mockGlobalSettingsPath,
+		});
+
+		// The consumer announces itself at factory time.
+		expect(eventsEmits.some((e) => e.channel === PROVIDER_READY_REQUEST)).toBe(true);
+		expect(eventsEmits.some((e) => e.channel === PROVIDER_READY)).toBe(false);
+
+		// PROVIDER loads second and emits `provider-ready`. The consumer sets its
+		// flag and re-emits `provider-ready-request` once (so a provider that
+		// loaded first learns it exists).
+		const requestsBefore = eventsEmits.filter((e) => e.channel === PROVIDER_READY_REQUEST).length;
+		events.emit(PROVIDER_READY, { version: 1 });
+		const requestsAfter = eventsEmits.filter((e) => e.channel === PROVIDER_READY_REQUEST).length;
+		expect(requestsAfter).toBe(requestsBefore + 1);
+
+		// A second `provider-ready` must NOT trigger another re-emit (no ping-pong).
+		events.emit(PROVIDER_READY, { version: 1 });
+		expect(eventsEmits.filter((e) => e.channel === PROVIDER_READY_REQUEST).length).toBe(requestsAfter);
+	});
+
+	it("registers agents over the bus when the provider is present and skips the symlink", async () => {
+		const projectDir = wireProjectAgent();
+
+		const { mockPi, handlers, events, eventsEmits } = createMockPi();
+		extension(mockPi as any, { globalSettingsPath: mockGlobalSettingsPath });
+
+		// Provider announces presence BEFORE session_start. The consumer's
+		// handshake listener (installed at factory time) sets the flag.
+		events.emit(PROVIDER_READY, { version: 1 });
+
+		const ctx = createMockCtx(projectDir);
+		handlers["session_start"]({}, ctx);
+
+		// No registration emitted during session_start — it is deferred to resource
+		// discovery (spec §8: discover, then surface).
+		expect(eventsEmits.filter((e) => e.channel === REGISTER)).toHaveLength(0);
+
+		// Symlink path is skipped: no `.pi/agents/cc-plugins` directory is created.
+		expect(existsSync(join(projectDir, CC_AGENTS_LINK_DIR))).toBe(false);
+
+		// The count is reported optimistically (same opacity as the symlink path).
+		expect(ctx.ui.notify).toHaveBeenCalledWith(
+			expect.stringContaining("1 agent(s)"),
+			"info",
+		);
+
+		// resource discovery emits one registration per source, then clears the list.
+		await handlers["resources_discover"]({}, ctx);
+		const registrations = eventsEmits.filter((e) => e.channel === REGISTER);
+		expect(registrations).toHaveLength(1);
+		expect(registrations[0].data).toEqual({
+			version: 1,
+			paths: [join(projectDir, ".claude", "agents", "reviewer.md")],
+			namespace: "", // standalone `.claude/agents` is unnamespaced
+			source: "project",
+		});
+
+		// A second discovery does not re-emit (the pending list was cleared).
+		await handlers["resources_discover"]({}, ctx);
+		expect(eventsEmits.filter((e) => e.channel === REGISTER)).toHaveLength(1);
+	});
+
+	it("uses the plugin name as namespace for plugin-shipped agents", async () => {
+		const projectDir = join(tmpDir, "herdr-plugin-project");
+		const settingsDir = join(projectDir, ".pi");
+		mkdirSync(settingsDir, { recursive: true });
+		writeFileSync(
+			join(settingsDir, "settings.json"),
+			JSON.stringify({ ccPlugins: [`local:${resolve(fixtures, "mock-plugin-with-agents")}`] }),
+		);
+
+		const { mockPi, handlers, events, eventsEmits } = createMockPi();
+		extension(mockPi as any, { globalSettingsPath: mockGlobalSettingsPath });
+		events.emit(PROVIDER_READY, { version: 1 });
+
+		const ctx = createMockCtx(projectDir);
+		handlers["session_start"]({}, ctx);
+		await handlers["resources_discover"]({}, ctx);
+
+		// mock-plugin-with-agents ships two agents under one plugin → one
+		// registration, namespaced by the plugin name, source `package`.
+		const registrations = eventsEmits.filter((e) => e.channel === REGISTER);
+		expect(registrations).toHaveLength(1);
+		expect(registrations[0].data).toMatchObject({
+			version: 1,
+			namespace: "plugin-with-agents",
+			source: "package",
+		});
+		expect((registrations[0].data as any).paths).toHaveLength(2);
+		expect(existsSync(join(projectDir, CC_AGENTS_LINK_DIR))).toBe(false);
+	});
+
+	it("emits one registration per source when multiple sources are present", async () => {
+		// A plugin (package source) AND a project `.claude/agents` (project source).
+		const projectDir = join(tmpDir, "herdr-multi");
+		const settingsDir = join(projectDir, ".pi");
+		mkdirSync(settingsDir, { recursive: true });
+		writeFileSync(
+			join(settingsDir, "settings.json"),
+			JSON.stringify({
+				ccPlugins: [`local:${resolve(fixtures, "mock-plugin-with-agents")}`],
+				ccClaudeProject: true,
+			}),
+		);
+		const agentsDir = join(projectDir, ".claude", "agents");
+		mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(
+			join(agentsDir, "standalone.md"),
+			"---\nname: standalone\ndescription: A bare-name agent\n---\n\nPrompt.\n",
+		);
+
+		const { mockPi, handlers, events, eventsEmits } = createMockPi();
+		extension(mockPi as any, { globalSettingsPath: mockGlobalSettingsPath });
+		events.emit(PROVIDER_READY, { version: 1 });
+
+		const ctx = createMockCtx(projectDir);
+		handlers["session_start"]({}, ctx);
+		await handlers["resources_discover"]({}, ctx);
+
+		const registrations = eventsEmits.filter((e) => e.channel === REGISTER);
+		expect(registrations).toHaveLength(2);
+		const byNs = new Map(registrations.map((r) => [(r.data as any).namespace, r.data]));
+		expect(byNs.get("plugin-with-agents")).toMatchObject({ source: "package" });
+		expect(byNs.get("")).toMatchObject({ source: "project" });
+	});
+
+	it("runs the convert-and-symlink path unchanged when the provider is absent and pi-subagents is installed", () => {
+		const projectDir = join(tmpDir, "subagents-fallback");
+		const settingsDir = join(projectDir, ".pi");
+		mkdirSync(settingsDir, { recursive: true });
+		writeFileSync(
+			join(settingsDir, "settings.json"),
+			JSON.stringify({ ccClaudeProject: true }),
+		);
+		const agentsDir = join(projectDir, ".claude", "agents");
+		mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(
+			join(agentsDir, "test-agent.md"),
+			"---\nname: test-agent\ndescription: Test\nmodel: sonnet\ntools: read\n---\n\nPrompt.\n",
+		);
+
+		// pi-subagents installed, herdr provider NOT announced.
+		writeFileSync(mockGlobalSettingsPath, JSON.stringify({ packages: ["npm:pi-subagents"] }));
+
+		const { mockPi, handlers, eventsEmits } = createMockPi();
+		extension(mockPi as any, { globalSettingsPath: mockGlobalSettingsPath });
+
+		const ctx = createMockCtx(projectDir);
+		handlers["session_start"]({}, ctx);
+
+		// The symlink lands and carries the converted frontmatter.
+		const linkPath = join(projectDir, CC_AGENTS_LINK_DIR, "claude-project--test-agent.md");
+		expect(existsSync(linkPath)).toBe(true);
+		const converted = readFileSync(linkPath, "utf-8");
+		expect(converted).toContain("package: claude-project");
+		expect(converted).not.toContain("model:");
+
+		// No bus registration is emitted in the fallback branch.
+		expect(eventsEmits.filter((e) => e.channel === REGISTER)).toHaveLength(0);
+	});
+
+	it("warns naming the migration target first and the legacy alternative second when neither is present", () => {
+		const projectDir = join(tmpDir, "neither");
+		const settingsDir = join(projectDir, ".pi");
+		mkdirSync(settingsDir, { recursive: true });
+		writeFileSync(
+			join(settingsDir, "settings.json"),
+			JSON.stringify({ ccClaudeProject: true }),
+		);
+		const agentsDir = join(projectDir, ".claude", "agents");
+		mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(
+			join(agentsDir, "test-agent.md"),
+			"---\nname: test-agent\ndescription: Test\n---\n\nPrompt.\n",
+		);
+
+		// No packages installed, no provider announced.
+		writeFileSync(mockGlobalSettingsPath, JSON.stringify({ packages: [] }));
+
+		const { mockPi, handlers, eventsEmits } = createMockPi();
+		extension(mockPi as any, { globalSettingsPath: mockGlobalSettingsPath });
+
+		const ctx = createMockCtx(projectDir);
+		handlers["session_start"]({}, ctx);
+
+		const warning = ctx.ui.notify.mock.calls.find(
+			(call) => call[1] === "warning",
+		)?.[0] as string | undefined;
+		expect(warning).toBeDefined();
+		// Migration target named first, legacy alternative second.
+		expect(warning!.indexOf("@asermax/pi-herdr-subagents")).toBeLessThan(
+			warning!.indexOf("pi-subagents"),
+		);
+		expect(warning!).toContain("@asermax/pi-herdr-subagents");
+		expect(warning!).toContain("pi-subagents");
+
+		// No symlink, no registration.
+		expect(existsSync(join(projectDir, CC_AGENTS_LINK_DIR))).toBe(false);
+		expect(eventsEmits.filter((e) => e.channel === REGISTER)).toHaveLength(0);
+	});
+
+	it("decrements the refcount on shutdown only on the pi-subagents branch", () => {
+		// --- pi-subagents branch: refcount fires ---
+		const subagentsProject = join(tmpDir, "shutdown-subagents");
+		const subagentsSettings = join(subagentsProject, ".pi");
+		mkdirSync(subagentsSettings, { recursive: true });
+		writeFileSync(
+			join(subagentsSettings, "settings.json"),
+			JSON.stringify({ ccClaudeProject: true }),
+		);
+		const subAgentsDir = join(subagentsProject, ".claude", "agents");
+		mkdirSync(subAgentsDir, { recursive: true });
+		writeFileSync(
+			join(subAgentsDir, "a.md"),
+			"---\nname: a\ndescription: A\n---\n\nPrompt.\n",
+		);
+		writeFileSync(mockGlobalSettingsPath, JSON.stringify({ packages: ["npm:pi-subagents"] }));
+
+		{
+			const { mockPi, handlers } = createMockPi();
+			extension(mockPi as any, { globalSettingsPath: mockGlobalSettingsPath });
+			const ctx = createMockCtx(subagentsProject);
+			handlers["session_start"]({}, ctx);
+			expect(existsSync(join(subagentsProject, CC_AGENTS_LINK_DIR))).toBe(true);
+			handlers["session_shutdown"]({}, ctx);
+			// Refcount decremented → symlink directory removed.
+			expect(existsSync(join(subagentsProject, CC_AGENTS_LINK_DIR))).toBe(false);
+		}
+
+		// --- herdr branch: refcount must NOT fire; symlink dir never existed ---
+		const herdrProject = join(tmpDir, "shutdown-herdr");
+		const herdrSettings = join(herdrProject, ".pi");
+		mkdirSync(herdrSettings, { recursive: true });
+		writeFileSync(
+			join(herdrSettings, "settings.json"),
+			JSON.stringify({ ccClaudeProject: true }),
+		);
+		const herdrAgentsDir = join(herdrProject, ".claude", "agents");
+		mkdirSync(herdrAgentsDir, { recursive: true });
+		writeFileSync(
+			join(herdrAgentsDir, "a.md"),
+			"---\nname: a\ndescription: A\n---\n\nPrompt.\n",
+		);
+
+		{
+			const { mockPi, handlers, events } = createMockPi();
+			extension(mockPi as any, { globalSettingsPath: mockGlobalSettingsPath });
+			events.emit(PROVIDER_READY, { version: 1 });
+			const ctx = createMockCtx(herdrProject);
+			handlers["session_start"]({}, ctx);
+			expect(existsSync(join(herdrProject, CC_AGENTS_LINK_DIR))).toBe(false);
+
+			// Shutdown must not throw and must leave the (absent) symlink dir absent.
+			expect(() => handlers["session_shutdown"]({}, ctx)).not.toThrow();
+			expect(existsSync(join(herdrProject, CC_AGENTS_LINK_DIR))).toBe(false);
+		}
 	});
 });
