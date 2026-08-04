@@ -121,7 +121,7 @@ export default function (pi: ExtensionAPI, options?: ExtensionOptions) {
 	let hasRefcount = false;
 	/** Track the cwd for cleanup on shutdown */
 	let sessionCwd: string | null = null;
-	/** True once the herdr provider announced presence on the bus (spec §8). */
+	/** True once the herdr provider announced presence on the bus. */
 	let herdrProviderPresent = false;
 	/** Agent sources discovered during session_start but not yet registered over
 	 *  the bus; flushed one per source in the resources_discover handler. */
@@ -274,7 +274,6 @@ export default function (pi: ExtensionAPI, options?: ExtensionOptions) {
 			packageName: plugin.name,
 			cacheSlug: plugin.source.ref.replace(/[\/\\]/g, "--"),
 			agentPaths: plugin.agentPaths,
-			// Plugin-shipped agents are namespaced by the plugin name (spec §7).
 			namespace: plugin.name,
 			source: "package",
 		}));
@@ -286,7 +285,7 @@ export default function (pi: ExtensionAPI, options?: ExtensionOptions) {
 
 		if (totalAgentPaths > 0) {
 			if (herdrProviderPresent) {
-				// herdr-wins (spec §8): register Claude-format paths over the bus,
+				// herdr-wins: register Claude-format paths over the bus,
 				// no conversion. Registration happens during resource discovery (the
 				// provider's listener is guaranteed present by then); here we queue
 				// the sources and report the count optimistically, mirroring the
@@ -371,7 +370,7 @@ export default function (pi: ExtensionAPI, options?: ExtensionOptions) {
 
 	pi.on("resources_discover", async (_event, _ctx) => {
 		// Register agent sources queued during session_start over the herdr bus
-		// (spec §8). Fire-and-forget: no acknowledgement, and the count was
+		// Fire-and-forget: no acknowledgement, and the count was
 		// already reported optimistically during session_start. Emitting here is
 		// an unconstrained side effect, necessary because the discovery result
 		// type cannot carry agents. Every extension factory completes before any
@@ -396,7 +395,7 @@ export default function (pi: ExtensionAPI, options?: ExtensionOptions) {
 	});
 
 	pi.on("session_shutdown", () => {
-		// The refcount decrement fires only on the pi-subagents branch (spec §8):
+		// The refcount decrement fires only on the pi-subagents branch:
 		// the herdr branch skips the symlink and owns no refcount.
 		if (hasRefcount && sessionCwd) {
 			unlinkAgents(sessionCwd);
