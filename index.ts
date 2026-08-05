@@ -78,9 +78,8 @@ export interface ExtensionOptions {
 }
 
 /**
- * Where an agent definition came from, mapping onto the provider's precedence
- * rank (spec §8). Plugins ship as `package`; a standalone `.claude/agents`
- * directory ships as `user` (home) or `project` (cwd).
+ * Where an agent definition came from. Plugins ship as `package`; a standalone
+ * `.claude/agents` directory ships as `user` (home) or `project` (cwd).
  */
 type AgentSourceKind = "project" | "user" | "package";
 
@@ -88,8 +87,8 @@ interface AgentSource {
 	packageName: string;
 	cacheSlug: string;
 	agentPaths: string[];
-	/** Namespace for bus registration: the plugin name for plugin-shipped agents,
-	 * empty for a standalone `.claude/agents` directory (spec §7/§8). */
+	/** Namespace: the plugin name for plugin-shipped agents, empty for a
+	 * standalone `.claude/agents` directory. */
 	namespace: string;
 	/** Precedence-rank source: project, user, or package. */
 	source: AgentSourceKind;
@@ -142,8 +141,7 @@ export default function (pi: ExtensionAPI, options?: ExtensionOptions) {
 	): AgentSource | null => {
 		const agentPaths = discoverAgentPaths(claudeDir);
 		if (agentPaths.length === 0) return null;
-		// Standalone `.claude/agents` is unnamespaced (spec §7): the provider keys
-		// on (source, namespace), and an empty namespace marks a bare-name agent.
+		// Standalone `.claude/agents` is unnamespaced (bare-name agents).
 		return { packageName, cacheSlug: packageName, agentPaths, namespace: "", source };
 	};
 
