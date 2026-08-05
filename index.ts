@@ -71,15 +71,6 @@ export {
 	syncProjectMcpConfig,
 } from "./src/mcp.js";
 
-// Bus channels for the herdr provider seam (spec §8). The two packages are
-// decoupled in both directions — the channel names are a wire contract, not an
-// import. Prefix is the unscoped package name, matching the provider side
-// (herdr-subagents, ticket #21).
-const HERDR_PKG = "pi-herdr-subagents";
-const PROVIDER_READY = `${HERDR_PKG}:provider-ready`;
-const PROVIDER_READY_REQUEST = `${HERDR_PKG}:provider-ready-request`;
-const REGISTER = `${HERDR_PKG}:register`;
-
 /** Options accepted by the extension entry point. */
 export interface ExtensionOptions {
 	/** Override the global settings path (for testing). */
@@ -121,13 +112,7 @@ export default function (pi: ExtensionAPI, options?: ExtensionOptions) {
 	let hasRefcount = false;
 	/** Track the cwd for cleanup on shutdown */
 	let sessionCwd: string | null = null;
-	/** True once the herdr provider announced presence on the bus. */
-	let herdrProviderPresent = false;
-	/** Agent sources discovered during session_start but not yet registered over
-	 *  the bus; flushed one per source in the resources_discover handler. */
-	let pendingRegistrations: AgentSource[] = [];
-	/** Bus listener unsubs, drained on session_shutdown. */
-	const unsubs: Array<() => void> = [];
+
 
 	/** Read ccPlugins using the configured or overridden global settings path. */
 	const getPlugins = (cwd: string) => readCcPlugins(cwd, { globalSettingsPath: options?.globalSettingsPath });
@@ -162,42 +147,12 @@ export default function (pi: ExtensionAPI, options?: ExtensionOptions) {
 		return { packageName, cacheSlug: packageName, agentPaths, namespace: "", source };
 	};
 
-	// Consumer side of the presence handshake (spec §8). The provider
-	// (herdr-subagents, ticket #21) emits `provider-ready` and listens for
-	// `provider-ready-request`; this side is its symmetric mirror. Both sides act
-	// at factory time, where load order is not guaranteed, so each emits its own
-	// signal AND listens for the other's.
-	//
-	// SELF-EMIT TRAP — pi's EventBus is a Node EventEmitter, so a self-emit is
-	// delivered to the emitter's own listeners. Each side emits ONLY the signal
-	// it OWNS and listens only for the one it does not, or the provider would
-	// falsely mark itself present. The consumer therefore:
-	//   - emits `provider-ready-request` (its own signal);
-	//   - listens for `provider-ready`; on seeing it sets the flag and re-emits
-	//     `provider-ready-request` ONCE.
-	// The one-shot re-emit is required so a provider that loaded FIRST (and
-	// missed this request) learns the consumer exists; it is guarded so the two
-	// sides cannot ping-pong. The flag is correct by session start.
-	unsubs.push(
-		pi.events.on(PROVIDER_READY, () => {
-			const wasPresent = herdrProviderPresent;
-			herdrProviderPresent = true;
-			if (!wasPresent) pi.events.emit(PROVIDER_READY_REQUEST, {});
-		}),
-	);
-
-	// Announce ourselves. A provider that loaded before us already emitted its
-	// `provider-ready`, which the listener above caught; a provider that loads
-	// after us replies via this request.
-	pi.events.emit(PROVIDER_READY_REQUEST, {});
-
 	pi.on("session_start", async (_event, ctx) => {
 		sessionCwd = ctx.cwd;
 		resolvedPlugins = [];
 		claudeSkillPaths = [];
 		claudeAgentSources = [];
 		hasRefcount = false;
-		pendingRegistrations = [];
 
 		const ccPlugins = getPlugins(ctx.cwd);
 		const settingsOpts = getSettingsOpts(ctx.cwd);
@@ -284,58 +239,42 @@ export default function (pi: ExtensionAPI, options?: ExtensionOptions) {
 		);
 
 		if (totalAgentPaths > 0) {
-			if (herdrProviderPresent) {
-				// herdr-wins: register Claude-format paths over the bus,
-				// no conversion. Registration happens during resource discovery (the
-				// provider's listener is guaranteed present by then); here we queue
-				// the sources and report the count optimistically, mirroring the
-				// opacity the symlink path already has.
-				pendingRegistrations = agentSources;
-				agentCount = totalAgentPaths;
-			} else if (isSubagentsInstalled({ globalSettingsPath: options?.globalSettingsPath })) {
-				// Increment refcount to protect symlinks from concurrent session cleanup
-				incrementRefcount(ctx.cwd);
-				hasRefcount = true;
+			// Always convert + symlink agents into .pi/agents/cc-plugins/. Any agent
+			// consumer (herdr-subagents reads .pi/agents/ recursively; pi-subagents
+			// uses the symlinks) picks them up from the filesystem — no event bus.
+			incrementRefcount(ctx.cwd);
+			hasRefcount = true;
 
-				// Clean stale symlinks from sources no longer configured
-				const currentPackageNames = new Set(agentSources.map((source) => source.packageName));
-				cleanupStaleSymlinks(ctx.cwd, currentPackageNames);
+			// Clean stale symlinks from sources no longer configured
+			const currentPackageNames = new Set(agentSources.map((source) => source.packageName));
+			cleanupStaleSymlinks(ctx.cwd, currentPackageNames);
 
-				// Convert and cache agents, then create symlinks
-				const cachedAgents: Array<{ pluginName: string; agentName: string; cachedPath: string }> = [];
+			// Convert and cache agents, then create symlinks
+			const cachedAgents: Array<{ pluginName: string; agentName: string; cachedPath: string }> = [];
 
-				for (const source of agentSources) {
-					for (const agentPath of source.agentPaths) {
-						try {
-							const parsed = parseCcAgent(agentPath);
-							if (!parsed) continue;
+			for (const source of agentSources) {
+				for (const agentPath of source.agentPaths) {
+					try {
+						const parsed = parseCcAgent(agentPath);
+						if (!parsed) continue;
 
-							const converted = convertCcAgent(parsed, source.packageName);
-							const cachedPath = writeCachedAgent(source.cacheSlug, parsed.name, converted);
+						const converted = convertCcAgent(parsed, source.packageName);
+						const cachedPath = writeCachedAgent(source.cacheSlug, parsed.name, converted);
 
-							cachedAgents.push({
-								pluginName: source.packageName,
-								agentName: parsed.name,
-								cachedPath,
-							});
-							agentCount++;
-						} catch (err: any) {
-							errors.push(`  agent ${agentPath}: ${err?.message || err}`);
-						}
+						cachedAgents.push({
+							pluginName: source.packageName,
+							agentName: parsed.name,
+							cachedPath,
+						});
+						agentCount++;
+					} catch (err: any) {
+						errors.push(`  agent ${agentPath}: ${err?.message || err}`);
 					}
 				}
+			}
 
-				if (cachedAgents.length > 0) {
-					linkAgents(ctx.cwd, cachedAgents);
-				}
-			} else {
-				// Neither provider present (spec §8). Name the migration target
-				// first, the legacy alternative second.
-				ctx.ui.notify(
-					`cc-plugins: found ${totalAgentPaths} agent(s) in configured Claude sources but no agent provider is installed. ` +
-					`Install @asermax/pi-herdr-subagents (recommended) or pi-subagents (legacy).`,
-					"warning",
-				);
+			if (cachedAgents.length > 0) {
+				linkAgents(ctx.cwd, cachedAgents);
 			}
 		}
 
@@ -369,25 +308,6 @@ export default function (pi: ExtensionAPI, options?: ExtensionOptions) {
 	});
 
 	pi.on("resources_discover", async (_event, _ctx) => {
-		// Register agent sources queued during session_start over the herdr bus
-		// Fire-and-forget: no acknowledgement, and the count was
-		// already reported optimistically during session_start. Emitting here is
-		// an unconstrained side effect, necessary because the discovery result
-		// type cannot carry agents. Every extension factory completes before any
-		// lifecycle handler fires, so the provider's `register` listener is
-		// guaranteed present.
-		if (pendingRegistrations.length > 0) {
-			for (const source of pendingRegistrations) {
-				pi.events.emit(REGISTER, {
-					version: 1,
-					paths: source.agentPaths,
-					namespace: source.namespace,
-					source: source.source,
-				});
-			}
-			pendingRegistrations = [];
-		}
-
 		const pluginSkillPaths = resolvedPlugins.flatMap((p) => p.skillPaths);
 		const allSkillPaths = [...pluginSkillPaths, ...claudeSkillPaths];
 		if (allSkillPaths.length === 0) return undefined;
@@ -395,22 +315,10 @@ export default function (pi: ExtensionAPI, options?: ExtensionOptions) {
 	});
 
 	pi.on("session_shutdown", () => {
-		// The refcount decrement fires only on the pi-subagents branch:
-		// the herdr branch skips the symlink and owns no refcount.
+		// Decrement refcount and clean up symlinks if this was the last session.
 		if (hasRefcount && sessionCwd) {
 			unlinkAgents(sessionCwd);
 			hasRefcount = false;
-		}
-
-		// Drain the bus handshake listener. Failing one unsub must not abort the rest.
-		while (unsubs.length > 0) {
-			const unsub = unsubs.pop();
-			if (!unsub) continue;
-			try {
-				unsub();
-			} catch {
-				// A failing unsubscribe must not abort cleanup of the rest.
-			}
 		}
 	});
 }
