@@ -1,3 +1,10 @@
+# [1.6.0](https://github.com/asermax/pi-cc-plugins/compare/v1.5.0...v1.6.0) (2026-08-05)
+
+
+### Features
+
+* register Claude-format agents over the pi.events bus ([d4be4cb](https://github.com/asermax/pi-cc-plugins/commit/d4be4cba0c9ce6ba323cea7e5fb6ee592e648281))
+
 # [1.5.0](https://github.com/asermax/pi-cc-plugins/compare/v1.4.0...v1.5.0) (2026-05-26)
 
 
