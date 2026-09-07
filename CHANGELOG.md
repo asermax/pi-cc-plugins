@@ -1,3 +1,10 @@
+## [1.6.1](https://github.com/asermax/pi-cc-plugins/compare/v1.6.0...v1.6.1) (2026-09-07)
+
+
+### Bug Fixes
+
+* follow symlinks when discovering skills and agents ([e52a96e](https://github.com/asermax/pi-cc-plugins/commit/e52a96e832c5b2374d43c961e91d98e55124db24))
+
 # [1.6.0](https://github.com/asermax/pi-cc-plugins/compare/v1.5.0...v1.6.0) (2026-08-05)
 
 
