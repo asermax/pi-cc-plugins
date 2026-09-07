@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { getCacheBaseDir } from "./cache.js";
+import { isDirectory, isFile, realPathOrNull } from "./fs.js";
 import type { ResolvedPlugin } from "./types.js";
 
 /** Copy discovered skill directories to cache and sanitize their SKILL.md files. */
@@ -56,7 +57,9 @@ export function materializeStandaloneSkillPath(
 function copyAndSanitizeSkillDir(skillPath: string, cacheSkillPath: string): string {
 	rmSync(cacheSkillPath, { recursive: true, force: true });
 	mkdirSync(cacheSkillPath, { recursive: true });
-	cpSync(skillPath, cacheSkillPath, { recursive: true, force: true });
+	// dereference: symlinked sources must be copied as real files, a copied
+	// symlink breaks once outside the plugin tree
+	cpSync(skillPath, cacheSkillPath, { recursive: true, force: true, dereference: true });
 
 	const skillFilePath = join(cacheSkillPath, "SKILL.md");
 	if (existsSync(skillFilePath)) {
@@ -100,8 +103,11 @@ export function normalizeSkillName(name: string, fallbackName = "skill"): string
 /**
  * Recursively walk a directory to find skill directories (containing SKILL.md).
  * Returns the parent directories of SKILL.md files.
+ *
+ * Symlinks are followed and each resolved target is walked once: skills
+ * sharing a symlinked target are reported once, and symlink loops terminate.
  */
-export function walkSkillDir(dir: string, results: string[]): void {
+export function walkSkillDir(dir: string, results: string[], visited: Set<string> = new Set()): void {
 	let entries;
 	try {
 		entries = readdirSync(dir, { withFileTypes: true });
@@ -109,15 +115,24 @@ export function walkSkillDir(dir: string, results: string[]): void {
 		return;
 	}
 
-	if (entries.some((e) => e.isFile() && e.name === "SKILL.md")) {
+	if (entries.some((e) => e.name === "SKILL.md" && isFile(join(dir, e.name)))) {
 		results.push(dir);
 		return;
 	}
 
 	for (const entry of entries) {
-		if (entry.isDirectory() && !entry.name.startsWith(".")) {
-			walkSkillDir(join(dir, entry.name), results);
-		}
+		if (entry.name.startsWith(".")) continue;
+
+		const entryPath = join(dir, entry.name);
+		if (!isDirectory(entryPath)) continue;
+
+		// symlinked entries can point back to an ancestor, skip targets
+		// already walked so the recursion stays finite
+		const realEntryPath = realPathOrNull(entryPath);
+		if (realEntryPath == null || visited.has(realEntryPath)) continue;
+		visited.add(realEntryPath);
+
+		walkSkillDir(entryPath, results, visited);
 	}
 }
 

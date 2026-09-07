@@ -4,10 +4,11 @@
  * Resolves plugin sources into concrete directories, reads manifests,
  * and discovers SKILL.md files within plugin structures.
  */
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { SOURCE_TYPES, type ParsedSource, type ResolvedPlugin } from "./types.js";
+import { isDirectory, isFile, realPathOrNull } from "./fs.js";
 import { walkSkillDir } from "./skills.js";
 import { ensureCloned, updateClone } from "./cache.js";
 
@@ -113,7 +114,7 @@ export function discoverSkillPaths(pluginDir: string): string[] {
 		// Use default skills/ path
 	}
 
-	if (!existsSync(skillsDir) || !statSync(skillsDir).isDirectory()) {
+	if (!isDirectory(skillsDir)) {
 		return paths;
 	}
 
@@ -146,7 +147,7 @@ export function discoverAgentPaths(pluginDir: string): string[] {
 		// Use default agents/ path
 	}
 
-	if (!existsSync(agentsDir) || !statSync(agentsDir).isDirectory()) {
+	if (!isDirectory(agentsDir)) {
 		return paths;
 	}
 
@@ -165,7 +166,7 @@ export function discoverMcpConfigPaths(pluginDir: string): string[] {
 	const seen = new Set<string>();
 
 	const addPath = (configPath: string) => {
-		if (!isExistingFile(configPath) || seen.has(configPath)) return;
+		if (!isFile(configPath) || seen.has(configPath)) return;
 		seen.add(configPath);
 		paths.push(configPath);
 	};
@@ -191,14 +192,6 @@ function resolvePluginPath(pluginDir: string, value: string): string | null {
 	return resolvedPath;
 }
 
-function isExistingFile(filePath: string): boolean {
-	try {
-		return existsSync(filePath) && statSync(filePath).isFile();
-	} catch {
-		return false;
-	}
-}
-
 /**
  * Recursively walk a directory to find agent .md files.
  * Claude Code plugin agents are flat or nested .md files like:
@@ -206,7 +199,7 @@ function isExistingFile(filePath: string): boolean {
  *   agents/nested/debug-helper.md
  * We return the absolute paths to each .md file found.
  */
-function walkAgentDir(dir: string, results: string[]): void {
+function walkAgentDir(dir: string, results: string[], visited: Set<string> = new Set()): void {
 	let entries;
 	try {
 		entries = readdirSync(dir, { withFileTypes: true });
@@ -215,10 +208,21 @@ function walkAgentDir(dir: string, results: string[]): void {
 	}
 
 	for (const entry of entries) {
-		if (entry.isFile() && entry.name.endsWith(".md")) {
-			results.push(join(dir, entry.name));
-		} else if (entry.isDirectory() && !entry.name.startsWith(".")) {
-			walkAgentDir(join(dir, entry.name), results);
+		if (entry.name.startsWith(".")) continue;
+
+		const entryPath = join(dir, entry.name);
+
+		if (entry.name.endsWith(".md") && isFile(entryPath)) {
+			results.push(entryPath);
+			continue;
 		}
+
+		if (!isDirectory(entryPath)) continue;
+
+		const realEntryPath = realPathOrNull(entryPath);
+		if (realEntryPath == null || visited.has(realEntryPath)) continue;
+		visited.add(realEntryPath);
+
+		walkAgentDir(entryPath, results, visited);
 	}
 }

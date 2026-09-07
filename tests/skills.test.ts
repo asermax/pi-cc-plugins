@@ -1,8 +1,9 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { resolve, join } from "node:path";
-import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, lstatSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { normalizeSkillName, sanitizeSkillMarkdown, materializeStandaloneSkillPath } from "../src/skills.js";
+import { getCacheBaseDir } from "../src/cache.js";
 
 describe("normalizeSkillName", () => {
 	it("converts Claude skill names to Pi-compatible names", () => {
@@ -126,5 +127,35 @@ describe("materializeStandaloneSkillPath", () => {
 
 		// Different namespaces → different cache paths
 		expect(result1).not.toBe(result2);
+	});
+});
+
+describe("materializeStandaloneSkillPath with symlinks", () => {
+	const tmpDir = join(homedir(), ".pi-cc-plugins-test-symlink-mat");
+	const cacheNamespaceDir = join(getCacheBaseDir(), "skills", "symlink-test");
+
+	beforeEach(() => {
+		mkdirSync(tmpDir, { recursive: true });
+	});
+
+	afterEach(() => {
+		rmSync(tmpDir, { recursive: true, force: true });
+		rmSync(cacheNamespaceDir, { recursive: true, force: true });
+	});
+
+	it("copies a symlinked skill dir as a real directory", () => {
+		const targetDir = join(tmpDir, "target");
+		mkdirSync(targetDir, { recursive: true });
+		writeFileSync(join(targetDir, "SKILL.md"), "---\nname: linked\ndescription: Use when: testing\n---\n\nBody\n");
+
+		const rootDir = join(tmpDir, "skills-root");
+		mkdirSync(rootDir, { recursive: true });
+		symlinkSync(targetDir, join(rootDir, "linked"));
+
+		const result = materializeStandaloneSkillPath("symlink-test", "source", rootDir, join(rootDir, "linked"));
+
+		expect(lstatSync(result).isSymbolicLink()).toBe(false);
+		expect(existsSync(join(result, "SKILL.md"))).toBe(true);
+		expect(readFileSync(join(result, "SKILL.md"), "utf-8")).toContain('name: "linked"');
 	});
 });

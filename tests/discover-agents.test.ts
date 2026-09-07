@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { resolve, join } from "node:path";
-import { mkdirSync, rmSync, writeFileSync, existsSync, lstatSync, readFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, existsSync, lstatSync, readFileSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
 
 import {
@@ -376,5 +376,38 @@ describe("isSubagentsInstalled", () => {
 		// This reads the real user settings — just verify it doesn't throw
 		const result = isSubagentsInstalled();
 		expect(typeof result).toBe("boolean");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// discoverAgentPaths with symlinks
+// ---------------------------------------------------------------------------
+
+describe("discoverAgentPaths with symlinks", () => {
+	it("discovers symlinked agent files and directories", () => {
+		const sourceFile = join(tmpDir, "helper.md");
+		writeFileSync(sourceFile, "---\nname: helper\ndescription: Helps\n---\n\nHelper body\n");
+
+		const sourceDir = join(tmpDir, "extra-agents");
+		mkdirSync(sourceDir, { recursive: true });
+		writeFileSync(join(sourceDir, "other.md"), "---\nname: other\ndescription: Other\n---\n\nOther body\n");
+
+		const pluginDir = join(tmpDir, "symlink-plugin");
+		mkdirSync(join(pluginDir, "agents"), { recursive: true });
+		symlinkSync(sourceFile, join(pluginDir, "agents", "helper.md"));
+		symlinkSync(sourceDir, join(pluginDir, "agents", "extra"));
+
+		const paths = discoverAgentPaths(pluginDir);
+		expect(paths).toHaveLength(2);
+		expect(paths).toContain(join(pluginDir, "agents", "helper.md"));
+		expect(paths).toContain(join(pluginDir, "agents", "extra", "other.md"));
+	});
+
+	it("ignores a symlink pointing to a missing agent file", () => {
+		const pluginDir = join(tmpDir, "broken-symlink-plugin");
+		mkdirSync(join(pluginDir, "agents"), { recursive: true });
+		symlinkSync(join(tmpDir, "does-not-exist.md"), join(pluginDir, "agents", "ghost.md"));
+
+		expect(discoverAgentPaths(pluginDir)).toEqual([]);
 	});
 });
