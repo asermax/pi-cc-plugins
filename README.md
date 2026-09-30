@@ -206,14 +206,14 @@ If multiple Pi sessions are open in the same project, agent symlinks are referen
 
 ## MCP Servers
 
-Plugin MCP configs can be exposed through [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter) when that extension is installed. MCP configs are only loaded from plugins — standalone `.claude` directories are not scanned for MCP.
+Plugin MCP configs are registered with pi's built-in MCP support for the duration of the session. MCP configs are only loaded from plugins — standalone `.claude` directories are not scanned for MCP.
 
 ### Requirements
 
-**pi-mcp-adapter must be installed.** If plugin MCP configs are found but the adapter is missing, MCP loading is skipped with a warning.
+Pi's built-in MCP support (the `mcp` built-in extension, enabled by default). **pi-mcp-adapter must not be installed**: it replaces the built-in support, and pi then connects no servers. Remove it if present:
 
 ```bash
-pi install npm:pi-mcp-adapter
+pi uninstall npm:pi-mcp-adapter
 ```
 
 ### Config Locations
@@ -230,14 +230,15 @@ If multiple files define the same server name, later files in that order win bef
 
 1. On `session_start`, the extension scans plugin MCP configs after resolving `ccPlugins`
 2. Only object-shaped `mcpServers` / `mcp-servers` entries are imported (top-level `settings`, `imports`, and unknown fields are ignored)
-3. Servers are written to `{project}/.pi/mcp.json`, which pi-mcp-adapter already reads
-4. Managed entries are tracked in `{project}/.pi/mcp.cc-plugins.json` so stale plugin servers can be removed on the next startup
+3. Servers are registered in-session via `pi.registerMcpServer()` — nothing is written to the project's `.pi/mcp.json`
 
 Server names are namespaced as `{plugin-name}__{server-name}`. For example, a `chrome-devtools` server from `my-plugin` becomes `my-plugin__chrome-devtools`.
 
-User-owned entries in `.pi/mcp.json` are preserved. If a generated plugin server name collides with an existing user server, the plugin server is skipped with a warning.
+Registrations are session-scoped: they disappear when the session ends, so there is no stale state to clean up. A server with the same name in `mcp.json` takes precedence over the registered plugin server. Server definitions pi cannot validate (for example `type: "sse"`) are skipped with a warning.
 
-MCP entries are not removed on `session_shutdown` — they stay in `.pi/mcp.json` so pi-mcp-adapter can read them on the next startup. If plugin MCP config is added for the first time during a running session, pi-mcp-adapter may need a reload or restart to pick it up.
+### Migration from pi-mcp-adapter
+
+Versions ≤ 1.6 wrote managed entries into `{project}/.pi/mcp.json` and tracked them in `{project}/.pi/mcp.cc-plugins.json`. On the next `session_start`, those managed entries are removed from `.pi/mcp.json` and the sidecar file is deleted. User-owned entries are preserved.
 
 ## Cache
 

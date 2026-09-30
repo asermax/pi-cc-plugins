@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import extension from "../index.js";
 import { parseSource } from "../src/source.js";
@@ -9,9 +9,8 @@ import { discoverMcpConfigPaths, resolvePlugin } from "../src/plugin.js";
 import {
 	collectPluginMcpServers,
 	readPluginMcpServers,
-	syncProjectMcpConfig,
+	cleanupLegacyMcpState,
 	getProjectMcpConfigPath,
-	getProjectMcpSidecarPath,
 } from "../src/mcp.js";
 import type { ResolvedPlugin } from "../src/types.js";
 
@@ -31,6 +30,7 @@ function createMockPi() {
 			flags.set(name, false);
 		}),
 		getFlag: vi.fn((name: string) => flags.get(name)),
+		registerMcpServer: vi.fn(),
 	};
 	return { mockPi, handlers, flags };
 }
@@ -75,6 +75,10 @@ function pluginFixture(name: string, mcpConfigPaths: string[]): ResolvedPlugin {
 		mcpConfigPaths,
 		source: parseSource(`local:${join(tmpDir, name)}`),
 	};
+}
+
+function legacySidecarPath(projectDir: string): string {
+	return join(projectDir, ".pi", "mcp.cc-plugins.json");
 }
 
 beforeEach(() => {
@@ -193,68 +197,84 @@ describe("collectPluginMcpServers", () => {
 	});
 });
 
-describe("syncProjectMcpConfig", () => {
-	it("does not create project MCP files when no servers or managed state exist", () => {
-		const projectDir = join(tmpDir, "empty-project");
-		const result = syncProjectMcpConfig(projectDir, []);
+describe("cleanupLegacyMcpState", () => {
+	it("is a no-op when no legacy sidecar exists", () => {
+		const projectDir = join(tmpDir, "clean-project");
 
-		expect(result.changed).toBe(false);
+		expect(cleanupLegacyMcpState(projectDir)).toEqual([]);
 		expect(existsSync(getProjectMcpConfigPath(projectDir))).toBe(false);
-		expect(existsSync(getProjectMcpSidecarPath(projectDir))).toBe(false);
 	});
 
-	it("preserves user config, skips user collisions, writes sidecar metadata, and cleans stale managed entries", () => {
-		const projectDir = join(tmpDir, "project");
-		const pluginDir = createPlugin("my-plugin", {
-			"mcp.json": {
-				mcpServers: {
-					existing: { command: "plugin-existing" },
-					fresh: { command: "plugin-fresh" },
-				},
-			},
-		});
+	it("removes managed entries, preserves user entries, and deletes the sidecar", () => {
+		const projectDir = join(tmpDir, "legacy-project");
 		const configPath = getProjectMcpConfigPath(projectDir);
 		writeJson(configPath, {
-			settings: { toolPrefix: "server" },
-			imports: ["cursor"],
 			custom: true,
 			mcpServers: {
 				manual: { command: "manual" },
-				"my-plugin__existing": { command: "user-existing" },
+				"my-plugin__browser": { command: "browser" },
+				"my-plugin__docs": { command: "docs" },
 			},
 		});
+		writeJson(legacySidecarPath(projectDir), {
+			version: 1,
+			entries: [
+				{ name: "my-plugin__browser", pluginName: "my-plugin", originalName: "browser", configPath: "/tmp/x" },
+				{ name: "my-plugin__docs", pluginName: "my-plugin", originalName: "docs", configPath: "/tmp/y" },
+			],
+		});
 
-		const plugin = resolvePlugin(parseSource(`local:${pluginDir}`));
-		const result = syncProjectMcpConfig(projectDir, [plugin]);
+		expect(cleanupLegacyMcpState(projectDir)).toEqual([]);
+
 		const written = JSON.parse(readFileSync(configPath, "utf-8"));
-		const sidecar = JSON.parse(readFileSync(getProjectMcpSidecarPath(projectDir), "utf-8"));
-
-		expect(result.writtenCount).toBe(1);
-		expect(result.warnings[0]).toContain("collides with an existing project MCP server");
-		expect(written.settings).toEqual({ toolPrefix: "server" });
-		expect(written.imports).toEqual(["cursor"]);
 		expect(written.custom).toBe(true);
-		expect(written.mcpServers.manual.command).toBe("manual");
-		expect(written.mcpServers["my-plugin__existing"].command).toBe("user-existing");
-		expect(written.mcpServers["my-plugin__fresh"].command).toBe("plugin-fresh");
-		expect(sidecar.entries.map((entry: { name: string }) => entry.name)).toEqual(["my-plugin__fresh"]);
+		expect(written.mcpServers).toEqual({ manual: { command: "manual" } });
+		expect(existsSync(legacySidecarPath(projectDir))).toBe(false);
+	});
 
-		syncProjectMcpConfig(projectDir, []);
-		const cleaned = JSON.parse(readFileSync(configPath, "utf-8"));
-		const cleanedSidecar = JSON.parse(readFileSync(getProjectMcpSidecarPath(projectDir), "utf-8"));
+	it("deletes the project mcp.json when nothing is left after cleanup", () => {
+		const projectDir = join(tmpDir, "empty-legacy-project");
+		const configPath = getProjectMcpConfigPath(projectDir);
+		writeJson(configPath, {
+			mcpServers: {
+				"my-plugin__browser": { command: "browser" },
+			},
+		});
+		writeJson(legacySidecarPath(projectDir), {
+			version: 1,
+			entries: [
+				{ name: "my-plugin__browser", pluginName: "my-plugin", originalName: "browser", configPath: "/tmp/x" },
+			],
+		});
 
-		expect(cleaned.mcpServers["my-plugin__fresh"]).toBeUndefined();
-		expect(cleaned.mcpServers.manual.command).toBe("manual");
-		expect(cleaned.mcpServers["my-plugin__existing"].command).toBe("user-existing");
-		expect(cleanedSidecar.entries).toEqual([]);
+		cleanupLegacyMcpState(projectDir);
+
+		expect(existsSync(configPath)).toBe(false);
+		expect(existsSync(legacySidecarPath(projectDir))).toBe(false);
+	});
+
+	it("warns and still deletes the sidecar when it cannot be parsed", () => {
+		const projectDir = join(tmpDir, "broken-sidecar-project");
+		const configPath = getProjectMcpConfigPath(projectDir);
+		writeJson(configPath, {
+			mcpServers: { manual: { command: "manual" } },
+		});
+		mkdirSync(join(projectDir, ".pi"), { recursive: true });
+		writeFileSync(legacySidecarPath(projectDir), "not json", "utf-8");
+
+		const warnings = cleanupLegacyMcpState(projectDir);
+
+		expect(warnings).toHaveLength(1);
+		expect(existsSync(legacySidecarPath(projectDir))).toBe(false);
+		expect(JSON.parse(readFileSync(configPath, "utf-8")).mcpServers.manual.command).toBe("manual");
 	});
 });
 
 describe("extension MCP lifecycle", () => {
-	it("warns and does not write MCP config when pi-mcp-adapter is absent", () => {
-		const projectDir = join(tmpDir, "missing-adapter-project");
-		const pluginDir = createPlugin("mcp-plugin", {
-			"mcp.json": { mcpServers: { server: { command: "server" } } },
+	it("registers plugin servers with pi's built-in MCP support", () => {
+		const projectDir = join(tmpDir, "register-project");
+		const pluginDir = createPlugin("MCP Plugin", {
+			"mcp.json": { mcpServers: { browser: { command: "browser" } } },
 		});
 		mkdirSync(join(projectDir, ".pi"), { recursive: true });
 		writeJson(join(projectDir, ".pi", "settings.json"), {
@@ -269,24 +289,70 @@ describe("extension MCP lifecycle", () => {
 		const ctx = createMockCtx(projectDir);
 		handlers["session_start"]({}, ctx);
 
-		expect(ctx.ui.notify).toHaveBeenCalledWith(
-			expect.stringContaining("pi-mcp-adapter is not installed"),
-			"warning",
-		);
+		expect(mockPi.registerMcpServer).toHaveBeenCalledWith("mcp-plugin__browser", { command: "browser" });
 		expect(existsSync(getProjectMcpConfigPath(projectDir))).toBe(false);
+		expect(ctx.ui.notify).toHaveBeenCalledWith(
+			expect.stringContaining("1 MCP server(s)"),
+			"info",
+		);
 	});
 
-	it("writes project-scoped MCP config when pi-mcp-adapter is installed", () => {
-		const projectDir = join(tmpDir, "adapter-project");
-		const pluginDir = createPlugin("MCP Plugin", {
-			"mcp.json": { mcpServers: { browser: { command: "browser" } } },
+	it("warns when a server registration fails", () => {
+		const projectDir = join(tmpDir, "invalid-server-project");
+		const pluginDir = createPlugin("bad-mcp-plugin", {
+			"mcp.json": { mcpServers: { legacy: { type: "sse", url: "https://example.com/sse" } } },
 		});
 		mkdirSync(join(projectDir, ".pi"), { recursive: true });
 		writeJson(join(projectDir, ".pi", "settings.json"), {
 			ccPlugins: [`local:${pluginDir}`],
 		});
 		const globalSettingsPath = join(tmpDir, "global-settings.json");
-		writeJson(globalSettingsPath, { packages: ["npm:pi-mcp-adapter"] });
+		writeJson(globalSettingsPath, {});
+
+		const { mockPi, handlers } = createMockPi();
+		mockPi.registerMcpServer.mockImplementation(() => {
+			throw new Error('Invalid MCP server config "bad-mcp-plugin__legacy": sse is not supported');
+		});
+		extension(mockPi as any, { globalSettingsPath });
+
+		const ctx = createMockCtx(projectDir);
+		handlers["session_start"]({}, ctx);
+
+		expect(mockPi.registerMcpServer).toHaveBeenCalledTimes(1);
+		expect(ctx.ui.notify).toHaveBeenCalledWith(
+			expect.stringContaining("bad-mcp-plugin__legacy"),
+			"warning",
+		);
+		expect(ctx.ui.notify).not.toHaveBeenCalledWith(
+			expect.stringContaining("MCP server(s)"),
+			"info",
+		);
+	});
+
+	it("cleans legacy managed entries on session_start", () => {
+		const projectDir = join(tmpDir, "migration-project");
+		const pluginDir = createPlugin("plain-plugin", {
+			".claude-plugin/plugin.json": { name: "plain-plugin" },
+		});
+		mkdirSync(join(projectDir, ".pi"), { recursive: true });
+		writeJson(join(projectDir, ".pi", "settings.json"), {
+			ccPlugins: [`local:${pluginDir}`],
+		});
+		const configPath = getProjectMcpConfigPath(projectDir);
+		writeJson(configPath, {
+			mcpServers: {
+				manual: { command: "manual" },
+				"my-plugin__browser": { command: "browser" },
+			},
+		});
+		writeJson(legacySidecarPath(projectDir), {
+			version: 1,
+			entries: [
+				{ name: "my-plugin__browser", pluginName: "my-plugin", originalName: "browser", configPath: "/tmp/x" },
+			],
+		});
+		const globalSettingsPath = join(tmpDir, "global-settings.json");
+		writeJson(globalSettingsPath, {});
 
 		const { mockPi, handlers } = createMockPi();
 		extension(mockPi as any, { globalSettingsPath });
@@ -294,11 +360,9 @@ describe("extension MCP lifecycle", () => {
 		const ctx = createMockCtx(projectDir);
 		handlers["session_start"]({}, ctx);
 
-		const written = JSON.parse(readFileSync(getProjectMcpConfigPath(projectDir), "utf-8"));
-		expect(written.mcpServers["mcp-plugin__browser"].command).toBe("browser");
-		expect(ctx.ui.notify).toHaveBeenCalledWith(
-			expect.stringContaining("1 MCP server(s)"),
-			"info",
-		);
+		const written = JSON.parse(readFileSync(configPath, "utf-8"));
+		expect(written.mcpServers).toEqual({ manual: { command: "manual" } });
+		expect(existsSync(legacySidecarPath(projectDir))).toBe(false);
+		expect(mockPi.registerMcpServer).not.toHaveBeenCalled();
 	});
 });

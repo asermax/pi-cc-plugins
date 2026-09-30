@@ -1,28 +1,13 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { normalizeSkillName } from "./skills.js";
-import type {
-	ManagedMcpEntry,
-	ManagedMcpSidecar,
-	McpServerEntry,
-	McpSyncResult,
-	PluginMcpServer,
-	ResolvedPlugin,
-} from "./types.js";
+import type { McpServerEntry, PluginMcpServer, ResolvedPlugin } from "./types.js";
 
 const MCP_CONFIG_PATH = ".pi/mcp.json";
-const MCP_SIDECAR_PATH = ".pi/mcp.cc-plugins.json";
+const LEGACY_SIDECAR_PATH = ".pi/mcp.cc-plugins.json";
 
 export function getProjectMcpConfigPath(projectRoot: string): string {
 	return join(projectRoot, MCP_CONFIG_PATH);
-}
-
-export function getProjectMcpSidecarPath(projectRoot: string): string {
-	return join(projectRoot, MCP_SIDECAR_PATH);
-}
-
-export function hasManagedMcpState(projectRoot: string): boolean {
-	return existsSync(getProjectMcpSidecarPath(projectRoot));
 }
 
 export function normalizeMcpName(name: string, fallbackName: string): string {
@@ -103,109 +88,58 @@ export function collectPluginMcpServers(plugins: ResolvedPlugin[]): { servers: P
 	return { servers, warnings };
 }
 
-export function syncProjectMcpConfig(projectRoot: string, plugins: ResolvedPlugin[]): McpSyncResult {
-	const configPath = getProjectMcpConfigPath(projectRoot);
-	const sidecarPath = getProjectMcpSidecarPath(projectRoot);
-	const collected = collectPluginMcpServers(plugins);
-	const sidecarExists = existsSync(sidecarPath);
-	const previousSidecar = readManagedMcpSidecar(sidecarPath);
+/**
+ * Remove managed MCP entries written by the old pi-mcp-adapter file merge:
+ * entries listed in the `.pi/mcp.cc-plugins.json` sidecar are deleted from
+ * `.pi/mcp.json` and the sidecar itself is removed.
+ */
+export function cleanupLegacyMcpState(projectRoot: string): string[] {
+	const warnings: string[] = [];
+	const sidecarPath = join(projectRoot, LEGACY_SIDECAR_PATH);
 
-	if (collected.servers.length === 0 && previousSidecar.entries.length === 0 && !sidecarExists) {
-		return {
-			serverCount: 0,
-			writtenCount: 0,
-			changed: false,
-			configPath,
-			sidecarPath,
-			warnings: collected.warnings,
-		};
-	}
+	if (!existsSync(sidecarPath)) return warnings;
 
-	const rawConfig = readJsonObject(configPath, true);
-	const mcpServers = getServersObject(rawConfig);
-	const previousManagedNames = new Set(previousSidecar.entries.map((entry) => entry.name));
-	const nextGeneratedNames = new Set(collected.servers.map((server) => server.generatedName));
-	const nextManagedEntries: ManagedMcpEntry[] = [];
-	const warnings = [...collected.warnings];
-
-	for (const entry of previousSidecar.entries) {
-		if (!nextGeneratedNames.has(entry.name)) {
-			delete mcpServers[entry.name];
-		}
-	}
-
-	for (const server of collected.servers) {
-		if (hasOwn(mcpServers, server.generatedName) && !previousManagedNames.has(server.generatedName)) {
-			warnings.push(`MCP server "${server.generatedName}" collides with an existing project MCP server; skipping plugin definition from ${server.configPath}`);
-			continue;
-		}
-
-		mcpServers[server.generatedName] = server.definition;
-		nextManagedEntries.push({
-			name: server.generatedName,
-			pluginName: server.pluginName,
-			originalName: server.originalName,
-			configPath: server.configPath,
-		});
-	}
-
-	setServersObject(rawConfig, mcpServers);
-
-	const nextSidecar: ManagedMcpSidecar = {
-		version: 1,
-		entries: nextManagedEntries,
-	};
-	const configChanged = writeJsonObjectIfChanged(configPath, rawConfig);
-	const sidecarChanged = writeJsonObjectIfChanged(sidecarPath, nextSidecar);
-
-	return {
-		serverCount: collected.servers.length,
-		writtenCount: nextManagedEntries.length,
-		changed: configChanged || sidecarChanged,
-		configPath,
-		sidecarPath,
-		warnings,
-	};
-}
-
-function readManagedMcpSidecar(sidecarPath: string): ManagedMcpSidecar {
 	try {
-		const raw = readJsonObject(sidecarPath, true);
-		if (raw.version !== 1 || !Array.isArray(raw.entries)) {
-			return { version: 1, entries: [] };
+		const configPath = getProjectMcpConfigPath(projectRoot);
+		const managedNames = readLegacyManagedNames(sidecarPath);
+		const raw = readJsonObject(configPath, true);
+
+		if (managedNames.size > 0 && isRecord(raw.mcpServers)) {
+			for (const name of managedNames) {
+				delete raw.mcpServers[name];
+			}
+
+			if (Object.keys(raw.mcpServers).length === 0) {
+				delete raw.mcpServers;
+			}
+
+			if (Object.keys(raw).length === 0) {
+				rmSync(configPath, { force: true });
+			} else {
+				writeJsonObjectIfChanged(configPath, raw);
+			}
 		}
-
-		return {
-			version: 1,
-			entries: raw.entries.filter(isManagedMcpEntry),
-		};
-	} catch {
-		return { version: 1, entries: [] };
+	} catch (err: any) {
+		warnings.push(`${sidecarPath}: ${err?.message || err}`);
 	}
+
+	rmSync(sidecarPath, { force: true });
+	return warnings;
 }
 
-function isManagedMcpEntry(value: unknown): value is ManagedMcpEntry {
-	return isRecord(value)
-		&& typeof value.name === "string"
-		&& typeof value.pluginName === "string"
-		&& typeof value.originalName === "string"
-		&& typeof value.configPath === "string";
-}
+function readLegacyManagedNames(sidecarPath: string): Set<string> {
+	const raw = readJsonObject(sidecarPath);
+	const names = new Set<string>();
 
-function getServersObject(raw: Record<string, unknown>): Record<string, McpServerEntry> {
-	const existing = raw.mcpServers ?? raw["mcp-servers"] ?? {};
-	if (!isRecord(existing)) return {};
+	if (!Array.isArray(raw.entries)) return names;
 
-	const servers: Record<string, McpServerEntry> = {};
-	for (const [name, definition] of Object.entries(existing)) {
-		if (isRecord(definition)) servers[name] = definition;
+	for (const entry of raw.entries) {
+		if (isRecord(entry) && typeof entry.name === "string") {
+			names.add(entry.name);
+		}
 	}
-	return servers;
-}
 
-function setServersObject(raw: Record<string, unknown>, servers: Record<string, McpServerEntry>): void {
-	delete raw["mcp-servers"];
-	raw.mcpServers = servers;
+	return names;
 }
 
 function readJsonObject(filePath: string, emptyWhenMissing = false): Record<string, unknown> {
@@ -237,8 +171,4 @@ function writeJsonObjectIfChanged(filePath: string, raw: unknown): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function hasOwn(value: Record<string, unknown>, key: string): boolean {
-	return Object.prototype.hasOwnProperty.call(value, key);
 }

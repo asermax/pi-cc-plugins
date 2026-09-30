@@ -26,10 +26,10 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, McpServerConfig } from "@earendil-works/pi-coding-agent";
 import type { ResolvedPlugin } from "./src/types.js";
 import { parseSource } from "./src/source.js";
-import { isMcpAdapterInstalled, readCcPlugins, readCcClaudeGlobal, readCcClaudeProject } from "./src/settings.js";
+import { readCcPlugins, readCcClaudeGlobal, readCcClaudeProject } from "./src/settings.js";
 import { discoverAgentPaths, resolvePlugin } from "./src/plugin.js";
 import { materializeSkillPaths, materializeStandaloneSkillPath, walkSkillDir } from "./src/skills.js";
 import {
@@ -42,14 +42,14 @@ import {
 	cleanupStaleSymlinks,
 	isSubagentsInstalled,
 } from "./src/agents.js";
-import { hasManagedMcpState, syncProjectMcpConfig } from "./src/mcp.js";
+import { cleanupLegacyMcpState, collectPluginMcpServers } from "./src/mcp.js";
 
 export { parseSource } from "./src/source.js";
-export { readCcPlugins, readCcClaudeGlobal, readCcClaudeProject, readPiPackages, isMcpAdapterInstalled, readJsonFile } from "./src/settings.js";
+export { readCcPlugins, readCcClaudeGlobal, readCcClaudeProject, readPiPackages, readJsonFile } from "./src/settings.js";
 export { getCacheBaseDir, getCloneDir, ensureCloned, updateClone } from "./src/cache.js";
 export { resolvePlugin, readPluginName, discoverSkillPaths, discoverAgentPaths, discoverMcpConfigPaths } from "./src/plugin.js";
 export { materializeSkillPaths, materializeStandaloneSkillPath, walkSkillDir, sanitizeSkillMarkdown, normalizeSkillName } from "./src/skills.js";
-export type { ParsedSource, ResolvedPlugin, ParsedAgent, McpServerEntry, PluginMcpServer, ManagedMcpEntry, ManagedMcpSidecar, McpSyncResult } from "./src/types.js";
+export type { ParsedSource, ResolvedPlugin, ParsedAgent, McpServerEntry, PluginMcpServer } from "./src/types.js";
 export {
 	parseFrontmatter,
 	parseCcAgent,
@@ -63,12 +63,10 @@ export {
 } from "./src/agents.js";
 export {
 	getProjectMcpConfigPath,
-	getProjectMcpSidecarPath,
-	hasManagedMcpState,
 	normalizeMcpName,
 	readPluginMcpServers,
 	collectPluginMcpServers,
-	syncProjectMcpConfig,
+	cleanupLegacyMcpState,
 } from "./src/mcp.js";
 
 /** Options accepted by the extension entry point. */
@@ -195,29 +193,25 @@ export default function (pi: ExtensionAPI, options?: ExtensionOptions) {
 		}
 
 		// --- MCP handling (from ccPlugins) ---
+		// Plugin servers are registered with pi's built-in MCP support for this
+		// session only; nothing is written to the project's .pi/mcp.json.
 		let mcpServerCount = 0;
-		const totalMcpConfigPaths = resolvedPlugins.reduce(
-			(sum, plugin) => sum + plugin.mcpConfigPaths.length,
-			0,
-		);
 
-		if (totalMcpConfigPaths > 0 || hasManagedMcpState(ctx.cwd)) {
-			if (!isMcpAdapterInstalled({ globalSettingsPath: options?.globalSettingsPath })) {
-				if (totalMcpConfigPaths > 0) {
-					ctx.ui.notify(
-						`cc-plugins: found ${totalMcpConfigPaths} MCP config(s) in configured Claude plugins but pi-mcp-adapter is not installed. ` +
-						`Install it with: pi install npm:pi-mcp-adapter`,
-						"warning",
-					);
-				}
-			} else {
-				try {
-					const result = syncProjectMcpConfig(ctx.cwd, resolvedPlugins);
-					mcpServerCount = result.writtenCount;
-					warnings.push(...result.warnings.map((warning) => `  mcp ${warning}`));
-				} catch (err: any) {
-					errors.push(`  mcp: ${err?.message || err}`);
-				}
+		for (const warning of cleanupLegacyMcpState(ctx.cwd)) {
+			warnings.push(`  mcp ${warning}`);
+		}
+
+		const collectedMcp = collectPluginMcpServers(resolvedPlugins);
+		for (const warning of collectedMcp.warnings) {
+			warnings.push(`  mcp ${warning}`);
+		}
+
+		for (const server of collectedMcp.servers) {
+			try {
+				pi.registerMcpServer(server.generatedName, server.definition as unknown as McpServerConfig);
+				mcpServerCount++;
+			} catch (err: any) {
+				warnings.push(`  mcp ${server.generatedName}: ${err?.message || err}`);
 			}
 		}
 

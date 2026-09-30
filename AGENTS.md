@@ -7,10 +7,10 @@ A [Pi](https://pi.dev) extension that bridges [Claude Code](https://code.claude.
 **Supported plugin components:**
 - **Skills** — `SKILL.md` files exposed via Pi's `resources_discover` event
 - **Agents** — `.md` files from `agents/` directories, converted to pi-subagents format and symlinked into `.pi/agents/cc-plugins/`
-- **MCP servers** — `mcp.json`, `.mcp.json`, or manifest-declared MCP configs merged into project `.pi/mcp.json` for pi-mcp-adapter
+- **MCP servers** — `mcp.json`, `.mcp.json`, or manifest-declared MCP configs registered in-session via `pi.registerMcpServer()` (pi built-in MCP support)
 
 **Requirements for agents:** [pi-subagents](https://github.com/nicobailon/pi-subagents) must be installed. If it's not found in Pi's `packages` settings, agent loading is skipped with a warning.
-**Requirements for MCP:** [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter) must be installed. If plugin MCP configs are found without it, MCP loading is skipped with a warning.
+**Requirements for MCP:** pi's built-in MCP support (the `mcp` built-in extension, enabled by default). [pi-mcp-adapter](https://github.com/nicobailon/pi-mcp-adapter) must NOT be installed — it replaces the built-in support and pi then connects no servers.
 
 ## Architecture
 
@@ -23,7 +23,7 @@ src/
   cache.ts        Git cloning + cache management under ~/.cache/pi-cc-plugins/ (ensureCloned / updateClone)
   plugin.ts       Resolves a ParsedSource into a ResolvedPlugin, discovers skill + agent + MCP config paths
   agents.ts       Agent parsing, format conversion, caching, and symlink management
-  mcp.ts          MCP config parsing, namespacing, project merge, and sidecar management
+  mcp.ts          MCP config parsing, namespacing, in-session registration, and legacy state cleanup
   skills.ts       Skill discovery, materialization, and frontmatter sanitization
   index.ts        Barrel re-exports of all public API
 tests/            Vitest tests with fixtures
@@ -47,11 +47,11 @@ tests/            Vitest tests with fixtures
 6. `session_shutdown` → `decrementRefcount()` → removes symlinks when count reaches 0
 
 #### MCP servers
-1. `session_start` → check `isMcpAdapterInstalled()` via Pi settings `packages` array when plugin MCP configs are present
-2. `discoverMcpConfigPaths()` checks `mcp.json`, `.mcp.json`, then `.claude-plugin/plugin.json` `mcp`
-3. `collectPluginMcpServers()` reads only object-shaped `mcpServers` / `mcp-servers` entries; top-level settings/imports are ignored
-4. Servers are namespaced as `{plugin-name}__{server-name}` and merged into `{project}/.pi/mcp.json`
-5. Managed entries are tracked in `{project}/.pi/mcp.cc-plugins.json` so stale entries can be removed on later `session_start`
+1. `session_start` → `discoverMcpConfigPaths()` checks `mcp.json`, `.mcp.json`, then `.claude-plugin/plugin.json` `mcp`
+2. `collectPluginMcpServers()` reads only object-shaped `mcpServers` / `mcp-servers` entries; top-level settings/imports are ignored
+3. Servers are namespaced as `{plugin-name}__{server-name}` and registered in-session via `pi.registerMcpServer()`; invalid configs are skipped with a warning
+4. Registrations are session-scoped — nothing is written to or removed from the project on `session_shutdown`
+5. Legacy state from the old pi-mcp-adapter file merge (managed entries in `.pi/mcp.json` tracked by `.pi/mcp.cc-plugins.json`) is removed on `session_start`
 6. Existing user MCP servers win on collision with generated plugin names
 
 ### Agent format conversion
@@ -74,7 +74,7 @@ Claude Code plugin agents use simple YAML frontmatter. The converter maps:
 
 Multiple Pi sessions in the same project can use agents concurrently. A `.cc-plugins-refcount` file in `.pi/agents/cc-plugins/` tracks active sessions. Symlinks and the directory are only removed when the count reaches 0 on `session_shutdown`.
 
-MCP entries are not removed on `session_shutdown`; they stay in project `.pi/mcp.json` so pi-mcp-adapter can read them on the next startup. Stale managed entries are cleaned on `session_start` using `.pi/mcp.cc-plugins.json`.
+MCP registrations are session-scoped: `session_shutdown` does nothing for MCP, and a server in `mcp.json` with the same name takes precedence over a registered plugin server. Legacy managed entries and the `.pi/mcp.cc-plugins.json` sidecar are cleaned once on `session_start`.
 
 ## Conventions
 

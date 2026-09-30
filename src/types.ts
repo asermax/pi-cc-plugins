@@ -65,24 +65,3 @@ export interface PluginMcpServer {
 	definition: McpServerEntry;
 	configPath: string;
 }
-
-export interface ManagedMcpEntry {
-	name: string;
-	pluginName: string;
-	originalName: string;
-	configPath: string;
-}
-
-export interface ManagedMcpSidecar {
-	version: 1;
-	entries: ManagedMcpEntry[];
-}
-
-export interface McpSyncResult {
-	serverCount: number;
-	writtenCount: number;
-	changed: boolean;
-	configPath: string;
-	sidecarPath: string;
-	warnings: string[];
-}

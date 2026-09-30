@@ -69,10 +69,6 @@ export function readPiPackages(options?: { globalSettingsPath?: string }): strin
 	return packages.filter((entry): entry is string => typeof entry === "string");
 }
 
-export function isMcpAdapterInstalled(options?: { globalSettingsPath?: string }): boolean {
-	return readPiPackages(options).some((entry) => entry.toLowerCase().includes("pi-mcp-adapter"));
-}
-
 export function readJsonFile(filePath: string): Record<string, unknown> {
 	if (!existsSync(filePath)) return {};
 	try {
