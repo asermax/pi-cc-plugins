@@ -1,3 +1,15 @@
+# [2.0.0](https://github.com/asermax/pi-cc-plugins/compare/v1.6.1...v2.0.0) (2026-09-30)
+
+
+* feat(mcp)!: register plugin MCP servers with pi's built-in MCP support ([ba99e1d](https://github.com/asermax/pi-cc-plugins/commit/ba99e1d932544272cab50f460d0a066990b3be03))
+
+
+### BREAKING CHANGES
+
+* plugin MCP servers now require pi's built-in MCP
+support. Uninstall pi-mcp-adapter, which replaces the built-in support
+and prevents any servers from connecting.
+
 ## [1.6.1](https://github.com/asermax/pi-cc-plugins/compare/v1.6.0...v1.6.1) (2026-09-07)
 
 
