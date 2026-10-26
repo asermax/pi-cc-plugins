@@ -74,6 +74,46 @@ Body
 		expect(result).not.toContain("allowed_tools:");
 		expect(result).not.toContain("allowedTools:");
 	});
+
+	it("truncates single-line descriptions over 1024 characters", () => {
+		const result = sanitizeSkillMarkdown(`---
+name: long-skill
+description: ${"a".repeat(1500)}
+---
+Body
+`, "long-skill");
+
+		expect(result).toContain(`description: "${"a".repeat(1024)}"`);
+	});
+
+	it("truncates block scalar descriptions over 1024 characters", () => {
+		const description = `${"a".repeat(600)}\n${"b".repeat(600)}`;
+		const result = sanitizeSkillMarkdown(`---
+name: long-skill
+description: |
+  ${"a".repeat(600)}
+  ${"b".repeat(600)}
+license: MIT
+---
+Body
+`, "long-skill");
+
+		expect(result).toContain(`description: ${JSON.stringify(description.slice(0, 1024))}`);
+		expect(result).toContain('license: "MIT"');
+		expect(result).not.toContain("description: |");
+	});
+
+	it("leaves descriptions at the 1024-character limit untouched", () => {
+		const description = "a".repeat(1024);
+		const result = sanitizeSkillMarkdown(`---
+name: limit-skill
+description: ${description}
+---
+Body
+`, "limit-skill");
+
+		expect(result).toContain(`description: "${description}"`);
+	});
 });
 
 describe("materializeStandaloneSkillPath", () => {

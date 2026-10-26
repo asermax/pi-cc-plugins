@@ -125,7 +125,7 @@ Skills are `SKILL.md` files that teach Pi how to handle specific tasks. They are
 
 ### Frontmatter Sanitization
 
-Claude Code `SKILL.md` files often use loose YAML (unquoted strings with colons, underscores in names) that Pi's stricter YAML parser rejects. The extension normalizes frontmatter during caching so skills load reliably.
+Claude Code `SKILL.md` files often use loose YAML (unquoted strings with colons, underscores in names) that Pi's stricter YAML parser rejects. The extension normalizes frontmatter during caching so skills load reliably. Descriptions are also truncated to Pi's 1024-character limit, since Pi warns at startup for longer ones.
 
 Because of this, **use `ccClaudeGlobal`/`ccClaudeProject` instead of Pi's native `skills` setting** when you want to load skills from `.claude/skills`. Pi's native `skills` setting loads files as-is without sanitization:
 

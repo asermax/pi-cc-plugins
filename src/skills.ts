@@ -13,6 +13,9 @@ import { getCacheBaseDir } from "./cache.js";
 import { isDirectory, isFile, realPathOrNull } from "./fs.js";
 import type { ResolvedPlugin } from "./types.js";
 
+// Pi warns at startup for skill descriptions over 1024 characters (Agent Skills spec limit)
+const MAX_DESCRIPTION_LENGTH = 1024;
+
 /** Copy discovered skill directories to cache and sanitize their SKILL.md files. */
 export function materializeSkillPaths(plugin: ResolvedPlugin): string[] {
 	return plugin.skillPaths.map((skillPath) => {
@@ -175,6 +178,14 @@ function sanitizeFrontmatterLines(frontmatter: string, fallbackName: string): st
 			continue;
 		}
 
+		if (key === "description" && value !== "") {
+			const { out, consumed } = sanitizeDescription(lines, index, line, value);
+			sanitized.push(...out);
+			index += consumed;
+
+			continue;
+		}
+
 		if (isBlockScalar(value)) {
 			sanitized.push(line);
 			continue;
@@ -193,6 +204,44 @@ function sanitizeFrontmatterLines(frontmatter: string, fallbackName: string): st
 	}
 
 	return sanitized;
+}
+
+function sanitizeDescription(
+	lines: string[],
+	index: number,
+	line: string,
+	value: string,
+): { out: string[]; consumed: number } {
+	if (!isBlockScalar(value)) {
+		return { out: [`description: ${formatYamlScalar(truncateDescription(stripOuterQuotes(value)))}`], consumed: 0 };
+	}
+
+	let blockEnd = index + 1;
+
+	while (blockEnd < lines.length && (lines[blockEnd] === "" || /^[ \t]/.test(lines[blockEnd]))) {
+		blockEnd++;
+	}
+
+	const blockLines = lines.slice(index + 1, blockEnd);
+
+	while (blockLines.length > 0 && blockLines[blockLines.length - 1] === "") {
+		blockLines.pop();
+	}
+
+	const description = blockLines.map((blockLine) => blockLine.trimStart()).join("\n");
+
+	if (description.length > MAX_DESCRIPTION_LENGTH) {
+		return {
+			out: [`description: ${quoteYamlString(truncateDescription(description))}`],
+			consumed: blockLines.length,
+		};
+	}
+
+	return { out: [line, ...blockLines], consumed: blockLines.length };
+}
+
+function truncateDescription(description: string): string {
+	return description.length > MAX_DESCRIPTION_LENGTH ? description.slice(0, MAX_DESCRIPTION_LENGTH) : description;
 }
 
 function isToolsFrontmatterKey(key: string): boolean {
