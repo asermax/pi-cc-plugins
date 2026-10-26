@@ -1,3 +1,10 @@
+## [2.0.1](https://github.com/asermax/pi-cc-plugins/compare/v2.0.0...v2.0.1) (2026-10-26)
+
+
+### Bug Fixes
+
+* **skills:** truncate descriptions to Pi's 1024-character limit ([3e9a957](https://github.com/asermax/pi-cc-plugins/commit/3e9a95796c93e8927a6a221896e25c40b8053f93))
+
 # [2.0.0](https://github.com/asermax/pi-cc-plugins/compare/v1.6.1...v2.0.0) (2026-09-30)
 
 
